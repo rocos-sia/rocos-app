@@ -1,0 +1,243 @@
+# =============================================================================
+# Talon 7 轴机械臂硬件配置
+# 从 models/talon/robot.urdf 提取
+# =============================================================================
+
+hardware:
+  # ===========================================================================
+  # joint_1 — 底座旋转 (id=0)
+  # ===========================================================================
+  - id: 0
+    type: driver
+    joint_name: joint_1
+    torque_source: load_torque
+    limit:
+      lower: -2.84
+      upper: 2.84
+      vel: 3.0
+      acc: 10.0
+      jerk: 150.0
+      effort: 30.0
+    transform:
+      ratio: 1.0
+      offset_pos_cnt: 0
+      cnt_per_unit: 156455.678
+      torque_per_unit: 1.0
+      user_unit_name: rad
+    inputs:
+      status_word: "Status word"
+      position_actual_value: "Position actual value"
+      velocity_actual_value: "Velocity actual value"
+      torque_actual_value: "Torque actual value"
+      load_torque_value: "Analog Input 1"
+      secondary_position_value: "Auxiliary position actual value"
+    outputs:
+      control_word: "Control word"
+      mode_of_operation: "Mode of operation"
+      target_position: "Target Position"
+      target_velocity: "Target Velocity"
+      target_torque: "Target Torque"
+
+  # ===========================================================================
+  # joint_2 — 肩部俯仰 (id=1)
+  # ===========================================================================
+  - id: 1
+    type: driver
+    joint_name: joint_2
+    torque_source: load_torque
+    limit:
+      lower: -2.22
+      upper: 2.22
+      vel: 3.0
+      acc: 10.0
+      jerk: 150.0
+      effort: 30.0
+    transform:
+      ratio: 1.0
+      offset_pos_cnt: 0
+      cnt_per_unit: 156455.678
+      torque_per_unit: 1.0
+      user_unit_name: rad
+    inputs:
+      status_word: "Status word"
+      position_actual_value: "Position actual value"
+      velocity_actual_value: "Velocity actual value"
+      torque_actual_value: "Torque actual value"
+      load_torque_value: "Analog Input 1"
+      secondary_position_value: "Auxiliary position actual value"
+    outputs:
+      control_word: "Control word"
+      mode_of_operation: "Mode of operation"
+      target_position: "Target Position"
+      target_velocity: "Target Velocity"
+      target_torque: "Target Torque"
+
+  # ===========================================================================
+  # joint_3 — 肘部俯仰 (id=2)
+  # ===========================================================================
+  - id: 2
+    type: driver
+    joint_name: joint_3
+    torque_source: load_torque
+    limit:
+      lower: -2.84
+      upper: 2.84
+      vel: 3.0
+      acc: 10.0
+      jerk: 150.0
+      effort: 30.0
+    transform:
+      ratio: 1.0
+      offset_pos_cnt: 0
+      cnt_per_unit: 156455.678
+      torque_per_unit: 1.0
+      user_unit_name: rad
+    inputs:
+      status_word: "Status word"
+      position_actual_value: "Position actual value"
+      velocity_actual_value: "Velocity actual value"
+      torque_actual_value: "Torque actual value"
+      load_torque_value: "Analog Input 1"
+      secondary_position_value: "Auxiliary position actual value"
+    outputs:
+      control_word: "Control word"
+      mode_of_operation: "Mode of operation"
+      target_position: "Target Position"
+      target_velocity: "Target Velocity"
+      target_torque: "Target Torque"
+
+  # ===========================================================================
+  # joint_4 — 腕部旋转 (id=3)
+  # ===========================================================================
+  - id: 3
+    type: driver
+    joint_name: joint_4
+    torque_source: load_torque
+    limit:
+      lower: -2.23
+      upper: 2.23
+      vel: 3.0
+      acc: 10.0
+      jerk: 150.0
+      effort: 30.0
+    transform:
+      ratio: 1.0
+      offset_pos_cnt: 0
+      cnt_per_unit: 156455.678
+      torque_per_unit: 1.0
+      user_unit_name: rad
+    inputs:
+      status_word: "Status word"
+      position_actual_value: "Position actual value"
+      velocity_actual_value: "Velocity actual value"
+      torque_actual_value: "Torque actual value"
+      load_torque_value: "Analog Input 1"
+      secondary_position_value: "Auxiliary position actual value"
+    outputs:
+      control_word: "Control word"
+      mode_of_operation: "Mode of operation"
+      target_position: "Target Position"
+      target_velocity: "Target Velocity"
+      target_torque: "Target Torque"
+
+  # ===========================================================================
+  # joint_5 — 腕部俯仰 (id=4)
+  # ===========================================================================
+  - id: 4
+    type: driver
+    joint_name: joint_5
+    torque_source: load_torque
+    limit:
+      lower: -2.71
+      upper: 2.71
+      vel: 3.0
+      acc: 10.0
+      jerk: 150.0
+      effort: 30.0
+    transform:
+      ratio: 1.0
+      offset_pos_cnt: 0
+      cnt_per_unit: 156455.678
+      torque_per_unit: 1.0
+      user_unit_name: rad
+    inputs:
+      status_word: "Status word"
+      position_actual_value: "Position actual value"
+      velocity_actual_value: "Velocity actual value"
+      torque_actual_value: "Torque actual value"
+      load_torque_value: "Analog Input 1"
+      secondary_position_value: "Auxiliary position actual value"
+    outputs:
+      control_word: "Control word"
+      mode_of_operation: "Mode of operation"
+      target_position: "Target Position"
+      target_velocity: "Target Velocity"
+      target_torque: "Target Torque"
+
+  # ===========================================================================
+  # joint_6 — 末端旋转 (id=5, cnt_per_unit 与其他轴不同)
+  # ===========================================================================
+  - id: 5
+    type: driver
+    joint_name: joint_6
+    torque_source: load_torque
+    limit:
+      lower: -2.11
+      upper: 2.11
+      vel: 3.0
+      acc: 10.0
+      jerk: 150.0
+      effort: 30.0
+    transform:
+      ratio: 1.0
+      offset_pos_cnt: 0
+      cnt_per_unit: 130379.73
+      torque_per_unit: 1.0
+      user_unit_name: rad
+    inputs:
+      status_word: "Status word"
+      position_actual_value: "Position actual value"
+      velocity_actual_value: "Velocity actual value"
+      torque_actual_value: "Torque actual value"
+      load_torque_value: "Analog Input 1"
+      secondary_position_value: "Auxiliary position actual value"
+    outputs:
+      control_word: "Control word"
+      mode_of_operation: "Mode of operation"
+      target_position: "Target Position"
+      target_velocity: "Target Velocity"
+      target_torque: "Target Torque"
+
+  # ===========================================================================
+  # joint_7 — 末端旋转 (id=6, upper limit 更新为 3.14)
+  # ===========================================================================
+  - id: 6
+    type: driver
+    joint_name: joint_7
+    torque_source: load_torque
+    limit:
+      lower: -2.84
+      upper: 3.14
+      vel: 3.0
+      acc: 10.0
+      jerk: 150.0
+      effort: 30.0
+    transform:
+      ratio: 1.0
+      offset_pos_cnt: -133826946
+      cnt_per_unit: 130379.73
+      torque_per_unit: 1.0
+      user_unit_name: rad
+    inputs:
+      status_word: "Status word"
+      position_actual_value: "Position actual value"
+      velocity_actual_value: "Velocity actual value"
+      torque_actual_value: "Torque actual value"
+      load_torque_value: "Analog Input 1"
+      secondary_position_value: "Auxiliary position actual value"
+    outputs:
+      control_word: "Control word"
+      mode_of_operation: "Mode of operation"
+      target_position: "Target Position"
+      target_velocity: "Target Velocity"
+      target_torque: "Target Torque"
