@@ -28,7 +28,7 @@ find_package(LibArchive REQUIRED)
 find_package(OpenSSL REQUIRED)
 
 # CMake VERSION 仅接受数字；完整 SemVer 版本单独拼接。
-set(ROCOS_APP_VERSION_PRERELEASE "rc.3")
+set(ROCOS_APP_VERSION_PRERELEASE "rc.4")
 set(ROCOS_APP_VERSION_FULL "${PROJECT_VERSION}")
 if(NOT ROCOS_APP_VERSION_PRERELEASE STREQUAL "")
     string(APPEND ROCOS_APP_VERSION_FULL "-${ROCOS_APP_VERSION_PRERELEASE}")
@@ -154,6 +154,7 @@ add_library(robot
         src/executor.cpp
         src/lua_script_engine.cpp
         src/robot.cpp
+        src/app_config.cpp
         src/robot_http_server.cpp
         src/tool_calibration.cpp
         src/frame_registry.cpp
@@ -220,7 +221,7 @@ add_executable(rocosAppMain
         src/rocosAppMain.cpp
         )
 target_compile_definitions(rocosAppMain PRIVATE
-        ROCOS_DEFAULT_CONFIG_FILE="${CMAKE_CURRENT_SOURCE_DIR}/config/config.yaml")
+        ROCOS_DEFAULT_CONFIG_FILE="/opt/rocos/config/app.yaml")
 
 ## Specify libraries to link a library or executable target against
 target_link_libraries(rocosAppMain
@@ -520,7 +521,7 @@ set_tests_properties(virtual_wall_test PROPERTIES
 add_executable(app_config_test test/app_config_test.cc)
 target_link_libraries(app_config_test PRIVATE robot)
 target_compile_definitions(app_config_test PRIVATE
-        ROCOS_TEST_CONFIG_FILE="${CMAKE_CURRENT_SOURCE_DIR}/config/config.yaml")
+        ROCOS_TEST_CONFIG_FILE="${CMAKE_CURRENT_SOURCE_DIR}/config/app.yaml")
 add_test(NAME app_config_test COMMAND app_config_test)
 
 add_executable(http_control_rights_test test/http_control_rights_test.cc)
@@ -577,7 +578,7 @@ set_tests_properties(diagnostics_http_test PROPERTIES LABELS network)
 # 离线回归只读取源资源，库的后备日志落在独立构建目录，避免测试清理用户日志。
 set(ROCOS_OFFLINE_TEST_DIRECTORY "${CMAKE_BINARY_DIR}/test-work")
 file(MAKE_DIRECTORY "${ROCOS_OFFLINE_TEST_DIRECTORY}")
-foreach(resource config models)
+foreach(resource config)
     file(CREATE_LINK "${CMAKE_SOURCE_DIR}/${resource}"
          "${ROCOS_OFFLINE_TEST_DIRECTORY}/${resource}" SYMBOLIC)
 endforeach()

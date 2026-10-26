@@ -25,8 +25,8 @@ cd build && ctest
 ./build/bin/unit_test --test-case="Hardware"
 
 # 运行控制器（先准备配置所对应的硬件或仿真环境）
-./build/bin/rocosAppMain --config=config/config.yaml
-./build/bin/rocosAppMain --config=config/config.yaml --http_port=8080
+./build/bin/rocosAppMain --config=config/app.yaml
+./build/bin/rocosAppMain --config=config/app.yaml --http_port=8080
 ```
 
 运行配置直接从指定路径加载，不在构建时复制到 `build/bin/`。`--config` 指定启动 YAML，文件内相对资源路径以该 YAML 所在目录为基准；当前入口没有 `--sim` 参数。
@@ -57,7 +57,7 @@ HTTP/JSON 服务实现位于 [src/robot_http_server.cpp](src/robot_http_server.c
 
 ### 配置
 
-[config/](config/) 保留启动入口 `config.yaml`、默认硬件配置 `hardware_talon_config.yaml`、关节绑定 `joint_binding.yaml`、负载 `payload.yaml`、坐标系 `frames.yaml`，以及五份由 `hardware_test` 读取的硬件配置样例和 `scripts/` 下的 Lua 脚本。机器人 URDF 与网格位于 [models/](models/)，由启动配置选择。未接入代码的旧 YAML 已清理，OpenAPI 文档移至 [docs/rocos-API.yaml](docs/rocos-API.yaml)。加载入口、字段用途及清理记录见 [配置使用分析](docs/config_yaml_usage_analysis.md)。
+[config/](config/) 是统一配置入口，包含 `app.yaml`、`user.yaml`、`robots/talon/`、`tools/` 和 `devices/talon_001/`。每个路径相对声明它的 YAML 文件；硬件 `joint_name` 直接绑定关节。使用与迁移边界见 [配置说明](config/README.md)。历史使用分析只作旧结构记录。
 
 ### 第三方依赖
 

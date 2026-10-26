@@ -5,7 +5,10 @@ rocos-ecm-1.1.3/
 rocos-app-1.0.4/
 old_drive/
 devel/
-tools/
+/tools/
+# Runtime tool snapshots and device frame exports (not startup inputs)
+/config/tools/.objects/
+/config/devices/*/frames.yaml
 logs/
 build/
 rocos-mujoco/

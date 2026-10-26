@@ -73,17 +73,20 @@ ctest --preset debug -R '^move_joint_test$'
 
 ### 启动配置
 
-`rocosAppMain` 默认直接读取构建时源目录下的 [`config/config.yaml`](config/config.yaml)，可从任意工作目录启动。运行前先确认文件中的硬件、模型和 EtherCAT 实例配置适用于当前环境。也可显式指定配置文件：
+`rocosAppMain` 的部署默认入口为 `/opt/rocos/config/app.yaml`。源码运行显式选择仓库中的 [config/app.yaml](config/app.yaml)，示例为 Talon 七轴机械臂、ECM 主站、无安装工具。
 
 ```bash
-./build/debug/bin/rocosAppMain --config=/path/to/rocos-app/config/config.yaml
-# 未使用预设时：
-./build/bin/rocosAppMain --config=/path/to/rocos-app/config/config.yaml
+# 离线检查：解析配置、URDF 和关节绑定，不连接硬件
+./build/release/bin/rocosAppMain --config=config/app.yaml --check_config
+# 导出有效快照以及供独立主站使用的配置，然后退出
+./build/release/bin/rocosAppMain --config=config/app.yaml --export_config=/tmp/talon-config
+# 准备好对应主站或仿真环境、快照目录权限后启动
+./build/release/bin/rocosAppMain --config=config/app.yaml
 ```
 
-配置包括 HTTP 地址、端口、控制权 TTL，以及 `robot` 下的硬件 YAML、EtherCAT ID、URDF、基座/末端 link、关节绑定和负载文件路径；`scripts` 和 `web_root` 分别指定 Lua 脚本和 Web 静态资源目录。相对资源路径以所选 `config.yaml` 的所在目录为基准，绝对路径直接使用。模型资源统一放在根目录 `models/`，默认通过 `../models/talon/robot.urdf` 选择 Talon 模型；切换模型时需同步调整硬件和关节绑定，HTTP URDF 接口也使用同一模型路径。
+全部发行配置与模型资源位于 `config/`：`robots/talon/` 保存型号、硬件、ECM、URDF、mesh 和 ENI；`devices/talon_001/` 保存设备安装与辨识引用；`tools/` 保存工具包。硬件的 `joint_name` 直接绑定关节，不再使用独立 `joint_binding.yaml`。
 
-配置优先级为显式 HTTP 命令行参数 > YAML > 内置默认值。例如 `--http_port=8081 --http_control_ttl_seconds=30` 只覆盖本次启动。配置文件不存在、格式错误、端口不在 1–65535 或 TTL 非正数时，会在初始化机器人前报错退出。迁移旧构建目录后，`bin/` 中的历史配置副本不会被主程序加载；部署到其他位置时使用 `--config` 指定实际文件。
+每个路径相对**声明它的 YAML 文件**，用户覆盖中的路径相对 `user.yaml`。优先级为内置默认值 → 基础文件 → 单份 `user.yaml` → 显式 HTTP 命令行参数。详细字段、部署权限、覆盖示例和独立主站的兼容边界见 [配置说明](config/README.md)。
 
 
 ## Related Projects

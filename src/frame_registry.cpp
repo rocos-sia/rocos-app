@@ -268,6 +268,18 @@ void FrameRegistry::reloadPackages(bool persist) {
     }
     if (publish(std::move(next),persist)!=Result::NoError) throw std::runtime_error("Cannot persist tool library refresh");
 }
+void FrameRegistry::initializePackage(const ToolPackage& configured) {
+    std::lock_guard<std::mutex> lock(writer_mutex_);
+    auto tool = ToolPackageFiles::freeze(configured.directory, library_);
+    if (tool.digest != configured.digest) throw std::runtime_error("Tool package changed during startup");
+    tool.mount = configured.mount;
+    tool.tcp = configured.tcp;
+    tool.calibration_yaml = configured.calibration_yaml;
+    auto next = std::make_shared<FrameRegistryState>(*snapshot());
+    putPackage(*next, std::move(tool), "");
+    next->active_tool = configured.name;
+    publish(std::move(next), false);
+}
 void FrameRegistry::updatePackage(const std::string& name, const KDL::Frame& mount, const KDL::Frame& tcp,
                                   const std::string& digest, uint64_t revision, const YAML::Node& calibration) {
     if (!validFrame(mount) || !validFrame(tcp) || !validFrame(mount*tcp)) throw std::invalid_argument("Invalid installation or TCP transform");

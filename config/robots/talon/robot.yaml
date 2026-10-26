@@ -1,0 +1,10 @@
+schema_version: 1
+name: talon
+package_version: "1.0.0"
+urdf: robot.urdf
+base_link: base_link
+tip_link: link_7
+ecat_id: 0
+hardware_config: hardware.yaml
+master_type: ecm
+master_config: ecm.yaml

@@ -1,0 +1,20 @@
+# 主站参数；相对路径以本文件所在目录为基准。
+master:
+  eni: eni7.xml
+  id: 0
+  duration: 0
+  cycle: 1000
+  verbose: diagnostic
+  cpuidx: 0
+  perf: timing
+  sp: 6000
+  log: ''
+  dcmmode: bus_shift
+  ctloff: false
+  link: IntelGbeRec
+  instance: 2
+  mode: polling
+  state: op
+  license: D783FABB-D1036502-0DC63002
+  maxbusslaves: 256
+  mbxsrv: null

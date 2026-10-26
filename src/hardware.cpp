@@ -188,12 +188,11 @@ IO Hardware::parseIO(const YAML::Node& node) {
 // 构造 / 析构
 // ==========================================================================
 
-Hardware::Hardware(const std::string& yaml_file_path, int ecat_id) {
-    auto log_ptr = Logger::getInstance("Hardware");
-    log_ptr->info("Loading hardware config from: {}", yaml_file_path);
+Hardware::Hardware(const std::string& yaml_file_path, int ecat_id)
+    : Hardware(loadFromYAML(yaml_file_path), ecat_id) {}
 
-    // 1. 加载 YAML 配置
-    config_ = loadFromYAML(yaml_file_path);
+Hardware::Hardware(const HardwareConfig& config, int ecat_id) : config_(config) {
+    auto log_ptr = Logger::getInstance("Hardware");
 
     // 2. 构建 ID → 索引 O(1) 查找表（vector 预分配 + -1 哨兵）
     buildIDLookupTables();
@@ -334,56 +333,23 @@ Result Hardware::ClearFault() {
 // ==========================================================================
 
 HardwareConfig Hardware::loadFromYAML(const std::string& yaml_file_path) {
-    auto log_ptr = Logger::getInstance("Hardware");
+    return LoadConfigFromNode(YAML::LoadFile(yaml_file_path));
+}
+
+HardwareConfig Hardware::LoadConfigFromNode(const YAML::Node& root) {
+    // 纯解析阶段不初始化日志系统或连接共享内存。
     HardwareConfig config;
-
-    try {
-        YAML::Node root = YAML::LoadFile(yaml_file_path);
-
-        // 顶层 key 为 "hardware"，是列表
-        YAML::Node hw_list = root["hardware"];
-        if (!hw_list || !hw_list.IsSequence()) {
-            log_ptr->error("YAML file missing 'hardware' sequence: {}", yaml_file_path);
-            throw std::runtime_error("Invalid hardware YAML: missing 'hardware' sequence");
-        }
-
-        for (const auto& node : hw_list) {
-            if (!node["type"]) {
-                log_ptr->warn("Skipping hardware entry without 'type' field");
-                continue;
-            }
-
-            std::string type_str = node["type"].as<std::string>();
-
-            if (type_str == "driver") {
-                Drive d = parseDrive(node);
-                log_ptr->info("  Parsed drive: id={}, joint={}", d.id, d.joint_name);
-                config.drives.push_back(std::move(d));
-            } else if (type_str == "ft_sensor") {
-                FTSensor ft = parseFTSensor(node);
-                log_ptr->info("  Parsed ft_sensor: id={}", ft.id);
-                config.ft_sensors.push_back(std::move(ft));
-            } else if (type_str == "io") {
-                IO io = parseIO(node);
-                log_ptr->info("  Parsed io: id={}, DI={}, DO={}, AI={}, AO={}",
-                              io.id,
-                              io.digital_in_channels,
-                              io.digital_out_channels,
-                              io.analog_in_channels,
-                              io.analog_out_channels);
-                config.ios.push_back(std::move(io));
-            } else {
-                log_ptr->warn("Unknown hardware type '{}' for id={}, skipping",
-                              type_str,
-                              yamlGetInt(node, "id", -1));
-            }
-        }
-
-    } catch (const YAML::Exception& e) {
-        log_ptr->error("YAML parse error in {}: {}", yaml_file_path, e.what());
-        throw;
+    const auto list = root["hardware"];
+    if (!list || !list.IsSequence()) {
+        throw std::runtime_error("Invalid hardware YAML: missing 'hardware' sequence");
     }
-
+    for (const auto& node : list) {
+        if (!node["type"]) continue;
+        const auto type = node["type"].as<std::string>();
+        if (type == "driver") config.drives.push_back(parseDrive(node));
+        else if (type == "ft_sensor") config.ft_sensors.push_back(parseFTSensor(node));
+        else if (type == "io") config.ios.push_back(parseIO(node));
+    }
     return config;
 }
 

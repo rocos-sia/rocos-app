@@ -51,7 +51,7 @@ bool extractJointRef(const rocos::Reference& ref, rocos::JntArray& q) {
 }
 
 std::string findUrdf() {
-    for (const auto& c : {"robot.urdf", "config/robot.urdf", "models/talon/robot.urdf"})
+    for (const auto& c : {"robot.urdf", "config/robot.urdf", "config/robots/talon/robot.urdf"})
         if (std::filesystem::exists(c)) return c;
     return "robot.urdf";
 }

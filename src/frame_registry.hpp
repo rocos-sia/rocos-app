@@ -40,6 +40,8 @@ public:
     const std::string& robotId() const { return robot_id_; }
     void importPackage(const std::string& zip, const std::string& expected_digest = "");
     void reloadPackages(bool persist = true);
+    // 启动配置只选择一个工具；不读取旧 frames 覆盖设备安装。
+    void initializePackage(const ToolPackage& configured);
     void updatePackage(const std::string& name, const KDL::Frame& mount, const KDL::Frame& tcp,
                        const std::string& digest, uint64_t revision, const YAML::Node& calibration = YAML::Node());
     std::string exportInstallation(const std::string& name) const;

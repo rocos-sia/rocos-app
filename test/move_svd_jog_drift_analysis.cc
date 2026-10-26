@@ -76,7 +76,7 @@ void writeCsv(const std::string& path, const std::vector<FkSample>& samples) {
 }
 
 std::string findUrdf() {
-    for (const auto& c : {"robot.urdf", "config/robot.urdf", "models/talon/robot.urdf"})
+    for (const auto& c : {"robot.urdf", "config/robot.urdf", "config/robots/talon/robot.urdf"})
         if (std::filesystem::exists(c)) return c;
     return "robot.urdf";
 }

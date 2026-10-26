@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-ROCOS-App is a Linux C++17 robot controller library with an HTTP/JSON API and Lua scripting. `src/` contains implementations and most module headers: hardware, robot state, motion planners, controllers, and HTTP services. `include/` holds shared headers. `test/` contains doctest suites and integration programs; `examples/` provides clients. Startup/hardware YAML files and Lua scripts live in `config/`; robot models (URDF, meshes, and model-specific YAML) live in root-level `models/`. `web/` contains built UI assets; `docs/` holds API and design documentation. Dependencies are vendored in `3rdparty/`. Generated binaries and libraries belong in `build/bin/` and `build/lib/`.
+ROCOS-App is a Linux C++17 robot controller library with an HTTP/JSON API and Lua scripting. `src/` contains implementations and most module headers: hardware, robot state, motion planners, controllers, and HTTP services. `include/` holds shared headers. `test/` contains doctest suites and integration programs; `examples/` provides clients. Startup/hardware YAML files and Lua scripts live in `config/`; robot models (URDF, meshes, and model-specific YAML) live in `config/robots/`; tools and device settings live in `config/tools/` and `config/devices/`. `web/` contains built UI assets; `docs/` holds API and design documentation. Dependencies are vendored in `3rdparty/`. Generated binaries and libraries belong in `build/bin/` and `build/lib/`.
 
 ## Build, Test, and Development Commands
 
@@ -13,10 +13,10 @@ cmake -S . -B build                     # Configure; runtime configuration stays
 cmake --build build -j                  # Build libraries, applications, and tests
 ctest --test-dir build --output-on-failure  # Run registered tests
 ctest --test-dir build -R '^move_joint_test$' --output-on-failure
-./build/bin/rocosAppMain --config=config/config.yaml
+./build/bin/rocosAppMain --config=config/app.yaml
 ```
 
-The main application reads startup settings from `config/config.yaml`; `--config` selects another file. Relative resource paths resolve against that YAML file's directory, and explicit HTTP flags override its HTTP settings. Configure the intended hardware or simulator before starting it; current entry-point flags do not include `--sim`.
+The installed application defaults to `/opt/rocos/config/app.yaml`; source runs use `--config=config/app.yaml`. Each relative resource path resolves against the YAML file declaring it. The selected `user.yaml` overrides base settings; explicit HTTP flags take highest precedence. Use `--check_config` for validation without hardware and `--export_config=<directory>` for effective/master YAML export. See `config/README.md`. Configure the intended hardware or simulator before starting it; current entry-point flags do not include `--sim`.
 
 With CMake 3.21+ and Ninja, use the `debug`, `release`, `relwithdebinfo`, or `minsizerel` presets: `cmake --preset debug`, `cmake --build --preset debug --parallel 2`, then `ctest --preset debug`. Preset builds use separate `build/<preset>/` directories, with executables in `build/<preset>/bin/`; configurations and scripts are loaded directly from their configured paths. Local overrides belong in the ignored `CMakeUserPresets.json`.
 

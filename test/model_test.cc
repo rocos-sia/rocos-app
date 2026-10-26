@@ -26,7 +26,7 @@
 
 // talon URDF 的限位在自定义 <hardware>/<limit> 标签内。
 TEST_CASE("Model - ParseUrdf with talon robot") {
-    const std::string urdf_path = "models/talon/robot.urdf";
+    const std::string urdf_path = "config/robots/talon/robot.urdf";
     const std::string base_link = "base_link";
     const std::string tip_link  = "link_7";
 

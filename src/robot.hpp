@@ -38,6 +38,7 @@
 #include "model_interface.hpp"
 #include "motion_interface.hpp"
 #include "hardware_interface.hpp"
+#include "hardware.hpp"
 
 #include "executor.hpp"
 #include "joint_binding.hpp"
@@ -117,6 +118,14 @@ class Robot {
     std::string frames{"frames.yaml"};
     std::string tool_library{"../tools"};
     std::string id{"default"};
+    bool composed_configuration{false};
+    std::optional<HardwareConfig> hardware;
+    std::optional<ToolPackage> tool;
+    std::optional<std::pair<double, Vector>> initial_payload;
+    YAML::Node payload_metadata;
+    bool payload_overridden{false};
+    int master_cycle_us{0};
+    std::string master_state{"op"};
   };
 
   explicit Robot();
@@ -434,6 +443,8 @@ class Robot {
   Vector load_com_;
   bool load_params_valid_{false};
   std::string load_params_path_{"payload.yaml"};  // 负载参数持久化文件
+  YAML::Node load_params_metadata_;
+  bool load_params_overridden_{false};
   std::string urdf_path_{"robot.urdf"};
 
   MotionMode servo_mode_{MotionMode::kJointPosition};  // 伺服运动模式: kJointPosition | kCartesianPosition

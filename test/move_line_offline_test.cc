@@ -49,7 +49,7 @@ constexpr int kMaxSteps    = 10000;
 constexpr int kPauseAtStep = 150;
 
 const std::string kCsvDir   = "/tmp/move_line_offline_csv/";
-const std::string kUrdfPath = "models/talon/robot.urdf";
+const std::string kUrdfPath = "config/robots/talon/robot.urdf";
 const std::string kBaseLink = "base_link";
 const std::string kTipLink  = "link_7";
 

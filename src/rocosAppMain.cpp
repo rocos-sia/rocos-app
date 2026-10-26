@@ -1,6 +1,7 @@
 #include <gflags/gflags.h>
 
 #include <csignal>
+#include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <string>
@@ -11,6 +12,8 @@
 #include "robot_http_server.hpp"
 
 DEFINE_string(config, ROCOS_DEFAULT_CONFIG_FILE, "Path to the startup YAML configuration");
+DEFINE_bool(check_config, false, "Validate configuration and model without connecting to hardware");
+DEFINE_string(export_config, "", "Validate and export effective/master YAML to this directory, then exit");
 DEFINE_string(http_host, "0.0.0.0", "Override HTTP server listen host from config");
 DEFINE_int32(http_port, 8080, "Override HTTP server listen port from config");
 DEFINE_int32(http_control_ttl_seconds, 300, "Override HTTP control rights TTL from config (positive)");
@@ -24,6 +27,7 @@ int main(int argc, char* argv[]) {
     using namespace rocos;
     gflags::ParseCommandLineFlags(&argc, &argv, true);
 
+    bool logging_initialized = false;
     try {
         AppConfig config = AppConfig::load(FLAGS_config);
         // 仅显式传入的命令行参数覆盖 YAML，未传入时使用文件配置。
@@ -34,20 +38,28 @@ int main(int argc, char* argv[]) {
         }
         config.validate();
         LogManager::configure(config.logging);
+        logging_initialized = true;
+        config.validateResources();
+        if (FLAGS_check_config || !FLAGS_export_config.empty()) {
+            if (!FLAGS_export_config.empty()) config.exportConfiguration(FLAGS_export_config);
+            std::cout << "Configuration validated: " << std::filesystem::absolute(FLAGS_config).lexically_normal() << std::endl;
+            LogManager::shutdown();
+            return 0;
+        }
+        if (config.robot.composed_configuration) {
+            const char* user_home = std::getenv("HOME");
+            if (!user_home || !std::filesystem::path(user_home).is_absolute()) {
+                throw std::runtime_error("HOME must be an absolute path to store configuration snapshots");
+            }
+            const auto snapshot = std::filesystem::path(user_home) / ".local/state/rocos/config_snapshots" /
+                                  config.robot.id / "effective.yaml";
+            config.writeSnapshot(snapshot.string());
+        }
         auto& logs = LogManager::instance();
         DiagnosticsHttpServer diagnostics(logs, config.diagnostics);
         diagnostics.start();
         auto startup_log = Logger::getInstance("Startup");
 
-        // 在初始化硬件前检查必需资源，避免错误路径引起部分启动。
-        for (const auto& path : {config.robot.hardware_config, config.robot.urdf}) {
-            if (!std::filesystem::is_regular_file(path)) {
-                throw std::runtime_error("Configuration resource not found: " + path);
-            }
-        }
-        if (!std::filesystem::is_directory(config.scripts)) {
-            throw std::runtime_error("Scripts directory not found: " + config.scripts);
-        }
         startup_log->info("Startup configuration loaded: {}", std::filesystem::absolute(FLAGS_config).lexically_normal().string());
 
         Robot robot(config.robot);
@@ -66,7 +78,11 @@ int main(int argc, char* argv[]) {
         robot.setDisabled();
         diagnostics.stop();
     } catch (const std::exception& error) {
-        std::cerr << "Startup failed (config=" << FLAGS_config << "): " << error.what() << std::endl;
+        if (logging_initialized) {
+            Logger::getInstance("Startup")->error("Startup failed (config={}): {}", FLAGS_config, error.what());
+        } else {
+            std::cerr << "[ERROR] Startup failed (config=" << FLAGS_config << "): " << error.what() << std::endl;
+        }
         LogManager::shutdown();
         return 1;
     }

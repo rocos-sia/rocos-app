@@ -1,0 +1,14 @@
+# Talon 无末端工具示例；部署时确认设备身份与标定数据。
+schema_version: 1
+id: talon_001
+expected_robot:
+  name: talon
+  package_version: "1.0.0"
+tool_config: null
+tool_install: null
+calibration_files:
+  joint_zero: null
+  kinematics: null
+  dynamics: null
+  payload: null
+  tool_tcp: null

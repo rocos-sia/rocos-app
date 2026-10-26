@@ -1,0 +1,15 @@
+schema_version: 1
+name: demo_gripper
+package_version: 1.0.0
+model:
+  urdf: gripper.urdf
+tcp:
+  position:
+  - 0
+  - 0
+  - 0.14
+  orientation:
+  - 0
+  - 0
+  - 0
+  - 1

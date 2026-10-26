@@ -1,0 +1,13 @@
+schema_version: 1
+name: robotiq_2f85
+package_version: 1.0.0
+model:
+  urdf: gripper.urdf
+# Identity placeholder: configure for the actual flange/adapter installation.
+mount:
+  position: [0, 0, 0]
+  orientation: [0, 0, 0, 1]
+# UNCALIBRATED placeholder: TCP initially coincides with the gripper base.
+tcp:
+  position: [0, 0, 0]
+  orientation: [0, 0, 0, 1]

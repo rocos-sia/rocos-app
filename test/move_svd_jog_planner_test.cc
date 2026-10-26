@@ -109,7 +109,7 @@ std::string findUrdfPath() {
     const std::vector<std::string> candidates = {
         "robot.urdf",
         "config/robot.urdf",
-        "models/talon/robot.urdf",
+        "config/robots/talon/robot.urdf",
     };
     for (const auto& candidate : candidates) {
         if (std::filesystem::exists(candidate)) {

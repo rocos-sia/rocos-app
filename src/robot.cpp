@@ -546,7 +546,16 @@ namespace rocos {
 
         // 检查 joint_binding.yaml 是否存在
         std::ifstream binding_file(joint_binding_path_);
-        if (binding_file.good()) {
+        if (joint_binding_path_.empty()) {
+          // 新结构只认 hardware 中的 joint_name，不按列表顺序推断。
+          for (const auto id : hardware_drive_ids) {
+            const auto name = hardware->getJointName(id);
+            if (name.empty() || joint_binding_->HasBindingForJoint(name) ||
+                joint_binding_->Bind(name, id) != Result::NoError) {
+              throw std::runtime_error("Invalid hardware joint_name binding: " + name);
+            }
+          }
+        } else if (binding_file.good()) {
           log_ptr_->info("Loading explicit joint binding from YAML: {}",
                          joint_binding_path_);
           rc = joint_binding_->LoadFromYaml(joint_binding_path_);
@@ -615,17 +624,30 @@ namespace rocos {
         joint_binding_path_ = config.joint_binding;
         load_params_path_ = config.payload;
         urdf_path_ = config.urdf;
-        hardware = std::make_unique<Hardware>(config.hardware_config, config.ecat_id);
         model = std::make_unique<Model>(config.urdf, config.base_link, config.tip_link);
+        if (config.composed_configuration && config.master_state != "op") {
+            throw std::runtime_error("Robot control requires master.state=op; other states are master maintenance modes");
+        }
+        hardware = config.hardware ? std::make_unique<Hardware>(*config.hardware, config.ecat_id)
+                                   : std::make_unique<Hardware>(config.hardware_config, config.ecat_id);
+        if (config.master_cycle_us > 0 && hardware->GetDt() != static_cast<uint32_t>(config.master_cycle_us)) {
+            throw std::runtime_error("Running master cycle differs from robot.master.cycle; apply the exported master configuration first");
+        }
 
         jointBinding();
-        if (std::filesystem::exists(config.frames) && frames_.load() != Result::NoError) {
+        if (!config.composed_configuration && std::filesystem::exists(config.frames) && frames_.load() != Result::NoError) {
             throw std::runtime_error("Cannot load configured coordinate frames: " + config.frames);
         }
-        frames_.reloadPackages(false);
+        if (config.composed_configuration) {
+            if (config.tool) frames_.initializePackage(*config.tool);
+        } else frames_.reloadPackages(false);
 
         // 尝试从配置文件加载已知负载参数（存在则跳过辨识）
-        const Result load_rc = LoadLoadParameters();
+        load_params_metadata_ = YAML::Clone(config.payload_metadata);
+        load_params_overridden_ = config.payload_overridden;
+        const Result load_rc = config.initial_payload
+            ? SetLoadParameters(config.initial_payload->first, config.initial_payload->second)
+            : (config.composed_configuration ? Result::ResourceUnavailable : LoadLoadParameters());
         if (load_rc == Result::NoError) {
             log_ptr_->info("Persisted payload parameters loaded; zero-force drag will skip payload identification.");
         }
@@ -1028,12 +1050,32 @@ namespace rocos {
     Result Robot::SaveLoadParameters(const std::string& path) const {
         const std::string file = path.empty() ? load_params_path_ : path;
 
+        if (file == load_params_path_ && load_params_overridden_) {
+            log_ptr_->error("Payload save conflicts with user.yaml overrides; edit the user configuration first.");
+            return Result::ResourceUnavailable;
+        }
+
         if (!load_params_valid_) {
             log_ptr_->error("Cannot save payload parameters: no valid payload parameters are available.");
             return Result::ResourceUnavailable;
         }
 
-        YAML::Node root;
+        if (file == load_params_path_ && load_params_metadata_.IsMap()) {
+            const auto context = load_params_metadata_["context"];
+            const auto state = frames_.snapshot();
+            const auto tool = state->packages.find(state->active_tool);
+            if (tool == state->packages.end() ||
+                tool->second.name != context["tool"]["name"].as<std::string>() ||
+                tool->second.version != context["tool"]["package_version"].as<std::string>() ||
+                (context["tool"]["digest"] && tool->second.digest != context["tool"]["digest"].as<std::string>()) ||
+                !KDL::Equal(tool->second.mount, ToolPackageFiles::pose(context["tool_install"]), 1e-9)) {
+                log_ptr_->error("Payload save conflicts with the recorded tool installation context.");
+                return Result::ResourceUnavailable;
+            }
+        }
+
+        YAML::Node root = file == load_params_path_ && load_params_metadata_.IsMap()
+            ? YAML::Clone(load_params_metadata_) : YAML::Node(YAML::NodeType::Map);
         root["mass"] = load_mass_;
         YAML::Node com;
         com.push_back(load_com_.x());

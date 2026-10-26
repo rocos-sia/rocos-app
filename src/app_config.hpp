@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 #include "robot.hpp"
 #include "diagnostics_http_server.hpp"
@@ -20,6 +21,15 @@ struct AppConfig {
     Robot::Config robot;
     std::string scripts{"scripts"};
     std::string web_root{"../web"};
+    // 新格式的完整有效配置；旧入口保持原有读取语义。
+    YAML::Node effective;
+    std::vector<std::string> source_files;
+    std::string entry_file;
+
+    static AppConfig load(const std::string& filename);
+    void validateResources() const;
+    void writeSnapshot(const std::string& filename) const;
+    void exportConfiguration(const std::string& directory) const;
 
     void validate() const {
         logging.validate();
@@ -37,7 +47,7 @@ struct AppConfig {
         if (!FrameRegistry::validName(robot.id)) throw std::invalid_argument("robot.id must be a valid stable name");
     }
 
-    static AppConfig load(const std::string& filename) {
+    static AppConfig loadLegacy(const std::string& filename) {
         namespace fs = std::filesystem;
         const fs::path config_path = fs::absolute(filename).lexically_normal();
         const YAML::Node root = YAML::LoadFile(config_path.string());
