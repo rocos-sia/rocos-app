@@ -175,8 +175,8 @@ Node masterConfig(Node master, const std::string& type, const std::string& where
     const bool ecm = type == "ecm";
     if (ecm)
         keys(master,
-             {"id", "eni", "duration", "cycle", "verbose", "cpuidx", "perf", "sp", "log", "dcmmode", "ctloff", "link",
-              "instance", "mode", "state", "license", "maxbusslaves", "mbxsrv"},
+             {"id", "eni", "duration", "cycle", "verbose", "cpuidx", "perf", "sp", "log", "dcmmode", "ctloff",
+              "link", "instance", "mode", "state", "license", "maxbusslaves", "mbxsrv", "command_timeout_ms"},
              where);
     else
         keys(master,
@@ -184,10 +184,12 @@ Node masterConfig(Node master, const std::string& type, const std::string& where
               "pdo_config_attempts", "slaves"},
              where);
     Node defaults = YAML::Load("id: 0\nduration: 0\ncycle: 1000\nverbose: diagnostic\nstate: op\n");
-    const auto backend = YAML::Load(
-        ecm ? "perf: timing\nsp: null\nlog: ''\ndcmmode: bus_shift\nctloff: false\nlink: IntelGbe\ninstance: 1\nmode: "
-              "polling\nlicense: ''\nmaxbusslaves: 256\nmbxsrv: null\n"
-            : "cpuidx: null\ndc: 'off'\npreop_timeout_ms: 10000\nstate_timeout_ms: 60000\npdo_config_attempts: 5\n");
+    const auto backend =
+        YAML::Load(ecm ? "perf: timing\nsp: null\nlog: ''\ndcmmode: bus_shift\nctloff: false\nlink: "
+                         "IntelGbe\ninstance: 1\nmode: "
+                         "polling\nlicense: ''\nmaxbusslaves: 256\nmbxsrv: null\ncommand_timeout_ms: 1000\n"
+                       : "cpuidx: null\ndc: 'off'\npreop_timeout_ms: 10000\nstate_timeout_ms: "
+                         "60000\npdo_config_attempts: 5\n");
     master = merge(merge(defaults, backend), master);
     integer(master, "id", 0, std::numeric_limits<int>::max(), where);
     integer(master, "duration", 0, std::numeric_limits<int>::max(), where);
@@ -213,6 +215,7 @@ Node masterConfig(Node master, const std::string& type, const std::string& where
         master["ctloff"].as<bool>();
         integer(master, "instance", 1, std::numeric_limits<int>::max(), where);
         integer(master, "maxbusslaves", 1, std::numeric_limits<int>::max(), where);
+        integer(master, "command_timeout_ms", 1, 60000, where);
         for (auto key : {"sp", "mbxsrv"})
             if (!master[key].IsNull()) integer(master, key, 1, 65535, where);
         string(master, "log", where, true);
@@ -270,7 +273,8 @@ Node masterConfig(Node master, const std::string& type, const std::string& where
                         require(names.insert(name).second, at + ": duplicate PDO name");
                         integer(entry, "index", 0, 65535, at);
                         integer(entry, "sub_index", 0, 255, at);
-                        integer(entry, "bit_length", 1, 255, at);
+                        const auto bits = integer(entry, "bit_length", 1, 255, at);
+                        require(bits % 8 == 0, at + ": SHM v2 requires byte-aligned PDO entries");
                     }
                 }
                 const size_t capacity = std::string(direction) == "rx_pdos" ? MAX_PDOUTPUT_NUM : MAX_PDINPUT_NUM;

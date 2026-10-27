@@ -4,6 +4,7 @@ master:
   id: 0
   duration: 0
   cycle: 1000
+  command_timeout_ms: 1000  # v2 非实时邮箱命令截止时间上限 [1, 60000] ms
   verbose: diagnostic
   cpuidx: 0
   perf: timing

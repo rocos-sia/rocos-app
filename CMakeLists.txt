@@ -28,7 +28,7 @@ find_package(LibArchive REQUIRED)
 find_package(OpenSSL REQUIRED)
 
 # CMake VERSION 仅接受数字；完整 SemVer 版本单独拼接。
-set(ROCOS_APP_VERSION_PRERELEASE "rc.4")
+set(ROCOS_APP_VERSION_PRERELEASE "")
 set(ROCOS_APP_VERSION_FULL "${PROJECT_VERSION}")
 if(NOT ROCOS_APP_VERSION_PRERELEASE STREQUAL "")
     string(APPEND ROCOS_APP_VERSION_FULL "-${ROCOS_APP_VERSION_PRERELEASE}")
@@ -73,6 +73,11 @@ find_package(orocos_kdl REQUIRED)
 ##################
 ##   3rdparty   ##
 ##################
+if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/rocos-shm/CMakeLists.txt")
+    message(FATAL_ERROR "Initialize the pinned SHM dependency: git submodule update --init 3rdparty/rocos-shm")
+endif()
+option(ROCOS_SHM_BUILD_TESTS "Build offline v2 IPC tests" ON)
+add_subdirectory(3rdparty/rocos-shm)
 add_subdirectory(3rdparty/nlopt)
 add_subdirectory(3rdparty/trac_ik)
 add_subdirectory(3rdparty/kdl_parser)
@@ -195,6 +200,7 @@ target_include_directories(robot
 target_link_libraries(robot
         PUBLIC
         LibArchive::LibArchive OpenSSL::Crypto
+        rocos::shm
         ${DEP_LIBS}
         $<BUILD_INTERFACE:rocos::logger>
         $<BUILD_INTERFACE:ruckig::ruckig>
@@ -306,6 +312,10 @@ configure_file(include/ver.h.in ver.h) # Version Definition
 #############
 
 enable_testing()
+add_executable(shared_memory_config_test test/shared_memory_config_test.cc)
+target_link_libraries(shared_memory_config_test PRIVATE robot)
+add_test(NAME shared_memory_config_test COMMAND shared_memory_config_test)
+set_tests_properties(shared_memory_config_test PROPERTIES TIMEOUT 30 RUN_SERIAL TRUE)
 add_executable(model_test test/model_test.cc)
 target_link_libraries(model_test
         PRIVATE
@@ -583,7 +593,7 @@ foreach(resource config)
          "${ROCOS_OFFLINE_TEST_DIRECTORY}/${resource}" SYMBOLIC)
 endforeach()
 set_tests_properties(
-    model_test hardware_test position_controller_test
+    model_test hardware_test shared_memory_config_test position_controller_test
     joint_admittance_controller_test joint_impedance_controller_test
     cartesian_impedance_controller_test unit_velocity_profile_test
     performance_profiler_test move_joint_test move_servo_test move_line_test

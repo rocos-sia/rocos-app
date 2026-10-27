@@ -114,16 +114,12 @@ int main(int argc, char* argv[]) {
     {
         auto* ec = rocos::EcatConfig::getInstance(ecat_id);
         if (ec && ec->ecatBus) {
-            constexpr std::size_t kShm = 5242880;
-            auto* rb = rocos::Hardware::scanForEcatBus(ec->ecatBus, kShm);
-            if (rb) ec->ecatBus = rb;
-            int st = ec->ecatBus->current_state;
+            int st = ec->getBusCurrentState();
             const char* ss = "???";
             switch (st) { case 1:ss="INIT";break;case 2:ss="PREOP";break;
                           case 4:ss="SAFEOP";break;case 8:ss="OP";break;
                           case 3:ss="BOOTSTRAP";break; }
-            std::cout << "[0/6] 主站: " << ss << "(" << st
-                      << "), 从站: " << ec->ecatBus->slave_num << std::endl;
+            std::cout << "[0/6] 主站: " << ss << "(" << st << "), 从站: " << ec->getSlaveNum() << std::endl;
             if (st < 4) {
                 std::cout << "  ⚠️  主站未到 SAFEOP/OP，等 master 进入 OP 再试\n";
                 return EXIT_FAILURE;

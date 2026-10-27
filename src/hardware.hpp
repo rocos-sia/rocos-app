@@ -29,8 +29,7 @@
 
 #include "ecat_type.hpp"
 #include "hardware_interface.hpp"
-#include "shared_memory_config.hpp"
-
+#include "pdo_entry.hpp"
 
 // 前向声明，避免在头文件中引入 yaml-cpp
 namespace YAML {
@@ -270,55 +269,55 @@ private:
     /// @brief 将力矩原始值转换为物理单位
     double torqueToUnit(const Drive& drive, int16_t raw_torque) const;
 
-    // ========== PDO 指针缓存结构体（初始化阶段一次性解析，运行阶段直接解引用）==========
+    // ========== PDO 索引缓存结构体（初始化阶段一次性解析，运行阶段按索引读写）==========
 
-    /// @brief 驱动器 PDO 指针缓存
+    /// @brief 驱动器 PDO 索引缓存
     struct DrivePDOCache {
-        // 输入 PDO 指针（从站 → 主站）
-        uint16_t* status_word{nullptr};
-        int32_t* position_actual_value{nullptr};
-        int32_t* velocity_actual_value{nullptr};
-        int16_t* torque_actual_value{nullptr};
-        int16_t* load_torque_value{nullptr};
-        int32_t* secondary_position_value{nullptr};
-        int32_t* digital_inputs{nullptr};
-        int32_t* digital_outputs_input{nullptr};  // DO 状态回读（输入 PDO 区）
+        // 输入 PDO 索引（从站 → 主站）
+        PdoEntry<uint16_t> status_word;
+        PdoEntry<int32_t> position_actual_value;
+        PdoEntry<int32_t> velocity_actual_value;
+        PdoEntry<int16_t> torque_actual_value;
+        PdoEntry<int16_t> load_torque_value;
+        PdoEntry<int32_t> secondary_position_value;
+        PdoEntry<int32_t> digital_inputs;
+        PdoEntry<int32_t> digital_outputs_input;  // DO 状态回读（输入 PDO 区）
 
-        // 输出 PDO 指针（主站 → 从站）
-        uint16_t* control_word{nullptr};
-        int8_t* mode_of_operation{nullptr};
-        int32_t* target_position{nullptr};
-        int32_t* target_velocity{nullptr};
-        int16_t* target_torque{nullptr};
-        int32_t* digital_outputs{nullptr};
+        // 输出 PDO 索引（主站 → 从站）
+        PdoEntry<uint16_t> control_word;
+        PdoEntry<int8_t> mode_of_operation;
+        PdoEntry<int32_t> target_position;
+        PdoEntry<int32_t> target_velocity;
+        PdoEntry<int16_t> target_torque;
+        PdoEntry<int32_t> digital_outputs;
     };
 
-    /// @brief 力传感器 PDO 指针缓存
+    /// @brief 力传感器 PDO 索引缓存
     struct FTSensorPDOCache {
-        int16_t* fx{nullptr};
-        int16_t* fy{nullptr};
-        int16_t* fz{nullptr};
-        int16_t* tx{nullptr};
-        int16_t* ty{nullptr};
-        int16_t* tz{nullptr};
+        PdoEntry<int16_t> fx;
+        PdoEntry<int16_t> fy;
+        PdoEntry<int16_t> fz;
+        PdoEntry<int16_t> tx;
+        PdoEntry<int16_t> ty;
+        PdoEntry<int16_t> tz;
     };
 
-    /// @brief IO 模块 PDO 指针缓存
+    /// @brief IO 模块 PDO 索引缓存
     struct IOPDOCache {
-        // 输入 PDO 指针
-        int32_t* digital_inputs{nullptr};
-        int32_t* digital_outputs_input{nullptr};  // DO 回读
-        int16_t* analog_inputs{nullptr};
+        // 输入 PDO 索引
+        PdoEntry<int32_t> digital_inputs;
+        PdoEntry<int32_t> digital_outputs_input;  // DO 回读
+        PdoEntry<int16_t> analog_inputs;
 
-        // 输出 PDO 指针
-        int32_t* digital_outputs{nullptr};
-        int16_t* analog_outputs{nullptr};
+        // 输出 PDO 索引
+        PdoEntry<int32_t> digital_outputs;
+        PdoEntry<int16_t> analog_outputs;
     };
 
     /// @brief 构建 ID → 索引 O(1) 查找表（vector 预分配 + -1 哨兵）
     void buildIDLookupTables();
 
-    /// @brief 一次性解析所有 PDO 变量名 → 缓存指针（在 EcatConfig 就绪后调用）
+    /// @brief 一次性解析所有 PDO 变量名 → 缓存索引（在 EcatConfig 就绪后调用）
     void buildPDOCache();
 
     // ========== CiA 402 状态机（与 old_drive 完全一致）==========
@@ -399,7 +398,7 @@ private:
     // 名称 → 索引（string key 保留 unordered_map）
     std::unordered_map<std::string, size_t> drive_name_to_index_;
 
-    // PDO 指针缓存（与 config_ 中对应 vector 等长，同一索引共用）
+    // PDO 索引缓存（与 config_ 中对应 vector 等长，同一索引共用）
     std::vector<DrivePDOCache> drive_pdo_cache_;
     std::vector<FTSensorPDOCache> ft_sensor_pdo_cache_;
     std::vector<IOPDOCache> io_pdo_cache_;
@@ -408,14 +407,6 @@ private:
     std::vector<DriveSMState> drive_sm_state_;
     std::unique_ptr<std::thread> sm_thread_;
     std::atomic<bool> sm_thread_running_{false};
-
-    void* ecm_mmap_base_{nullptr};  // mmap 基址，析构前还原给 SharedMemoryConfig 用
-
-public:
-    /// @brief 主站用 boost::managed_shared_memory，EcatBus 不在 offset 0 —
-    ///        在 mmap 段内扫描定位真正的 EcatBus，通过检查特征字段识别
-    /// @return 指向正确偏移处的 EcatBus 指针，未找到返回 nullptr
-    static EcatBus* scanForEcatBus(void* mmap_base, std::size_t size);
 };
 
 }  // namespace rocos

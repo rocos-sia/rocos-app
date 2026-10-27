@@ -12,7 +12,7 @@
 </div>
 :warning: Rocos-App is under development, not finished~ :thinking:
 
-版本遵循 [SemVer 2.0.0](https://semver.org/lang/zh-CN/)。当前处于面向 `3.1.0` 的内部测试阶段，使用 `3.1.0-rc.N`，测试稳定并确认后正式发布 `3.1.0`。实际版本以 `CMakeLists.txt` 为准；维护规则见 [版本维护 skill](.agents/skills/rocos-version-maintenance/SKILL.md)。
+本次版本统一为 `3.1.0`，实际版本以 `CMakeLists.txt` 为准。共享内存 ABI 2 与 v1 不兼容，主站和 App 必须同步重编译、停机升级。版本号不代表已完成实机验收；维护规则见 [版本维护 skill](.agents/skills/rocos-version-maintenance/SKILL.md)。
 
 ## Introduction
 
@@ -53,6 +53,7 @@ ROCOS-App is the application of robotics, which is designed as the robot control
 在仓库根目录执行，以下以 `debug` 为例，替换预设名即可切换：
 
 ```bash
+git submodule update --init 3rdparty/rocos-shm
 cmake --list-presets
 cmake --preset debug
 cmake --build --preset debug --parallel 2
@@ -70,6 +71,13 @@ ctest --preset debug -R '^move_joint_test$'
 支持 CMake Presets 的 IDE 可直接选择上述配置。个人编译器路径或额外缓存变量可放入根目录 `CMakeUserPresets.json`，继承仓库预设；该文件已加入 Git 忽略规则。
 
 未使用预设时，原有 CMake 3.15+ 的手动方式仍可使用：`cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug`，随后执行 `cmake --build build --parallel 2`。
+
+共享内存使用 [rocos-shm](https://github.com/rocos-sia/rocos-shm) 子模块，固定提交
+`87c436c49777834964a5f1a38d46b4e0c74d34b2`（包 2.0.0，ABI 2，Linux x86_64）。
+`src/shared_memory_config.hpp` 仅保留兼容 include；不要在 App 内复制协议实现或跟随 main 构建。
+更新依赖时需同步编译主站、App 与监控工具，并运行
+`ctest --preset release -R '^(rocos_shm_v2|shared_memory_config_test|app_config_test|hardware_test)$'`。
+前两个测试使用隔离的测试总线，覆盖 ABI 拒绝、跨进程邮箱握手和 Hardware 的 v2 PDO 读写，不连接真实设备。
 
 ### 启动配置
 

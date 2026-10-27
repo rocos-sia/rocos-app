@@ -373,6 +373,17 @@ slaves:
     CHECK(exported["version"].as<int>() == 2);
     CHECK(exported["slaves"][0]["init_commands"][0]["value"].as<int>() == -1);
     CHECK_FALSE(exported["master"]["slaves"].IsDefined());
+    for (const int bits : {1, 7, 9, 15, 255}) {
+        master["slaves"][0]["rx_pdos"][0]["entries"][0]["bit_length"] = bits;
+        write(directory / "overrides/igh.yaml", master);
+        CHECK_THROWS_AS(rocos::AppConfig::load(entry.string()), std::invalid_argument);
+    }
+    for (const int bits : {8, 16, 32, 64, 248}) {
+        master["slaves"][0]["rx_pdos"][0]["entries"][0]["bit_length"] = bits;
+        write(directory / "overrides/igh.yaml", master);
+        CHECK_NOTHROW(rocos::AppConfig::load(entry.string()));
+    }
+    master["slaves"][0]["rx_pdos"][0]["entries"][0]["bit_length"] = 16;
     master["slaves"][0]["init_commands"][0]["value"] = 128;
     write(directory / "overrides/igh.yaml", master);
     CHECK_THROWS(rocos::AppConfig::load(entry.string()));
@@ -380,4 +391,25 @@ slaves:
     master["slaves"][0]["init_commands"][0]["value"] = -1;
     write(directory / "overrides/igh.yaml", master);
     CHECK_THROWS(rocos::AppConfig::load(entry.string()));
+}
+
+TEST_CASE_FIXTURE(ConfigFixture, "ECM v2 command deadline is validated and exported") {
+    const auto entry = composed();
+    auto master = YAML::LoadFile((directory / "robots/talon/ecm.yaml").string());
+    master["master"].remove("command_timeout_ms");
+    write(directory / "robots/talon/ecm.yaml", master);
+    CHECK(
+        rocos::AppConfig::load(entry.string()).effective["robot"]["master"]["command_timeout_ms"].as<int>() ==
+        1000);
+    overrideWith("robot: {master: {command_timeout_ms: 2500}}\n");
+    const auto config = rocos::AppConfig::load(entry.string());
+    config.exportConfiguration((directory / "export").string());
+    const auto exported = YAML::LoadFile((directory / "export/ecm.yaml").string());
+    CHECK(exported["master"]["command_timeout_ms"].as<int>() == 2500);
+    const auto legacy = YAML::LoadFile((directory / "export/ecm-legacy.yaml").string());
+    CHECK(legacy["command_timeout_ms"].as<int>() == 2500);
+    for (const int value : {0, -1, 60001}) {
+        overrideWith("robot: {master: {command_timeout_ms: " + std::to_string(value) + "}}\n");
+        CHECK_THROWS(rocos::AppConfig::load(entry.string()));
+    }
 }
