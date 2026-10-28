@@ -87,7 +87,8 @@ def finish(stage, output, component, version, arch, compatibility, description,
     if configs:
         (metadata / 'conffiles').write_text('\n'.join(configs) + '\n')
     output.mkdir(parents=True, exist_ok=True)
-    deb = output / f'{package}_{deb_version}_{arch}.deb'
+    # GitHub normalizes '~' in asset names; keep Debian ordering inside control only.
+    deb = output / f'{package}_{version}_{arch}.deb'
     run('dpkg-deb', '--root-owner-group', '--build', str(stage), str(deb))
     release = {'schema_version': 1, 'component': component, 'version': version,
                'compatibility': compatibility, 'assets': [

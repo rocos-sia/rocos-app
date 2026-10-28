@@ -1,6 +1,6 @@
 # DEB 内测发布
 
-当前自动构建目标是 Ubuntu 22.04 / amd64。源码版本来自 `CMakeLists.txt`；例如 `3.2.0-rc.1` 对应 Git 标签 `v3.2.0-rc.1`、Debian 版本 `3.2.0~rc.1`（确保内测版本低于同号正式版）。
+当前自动构建目标是 Ubuntu 22.04 / amd64。源码版本来自 `CMakeLists.txt`；例如 `3.2.0-rc.2` 对应 Git 标签 `v3.2.0-rc.2`、Debian 版本 `3.2.0~rc.2`（确保内测版本低于同号正式版）。
 
 ## 本地构建
 
@@ -19,7 +19,7 @@ python3 packaging/build_deb.py
 
 ```bash
 sha256sum -c SHA256SUMS
-sudo apt install ./rocos-app_3.2.0~rc.1_amd64.deb
+sudo apt install ./rocos-app_3.2.0-rc.2_amd64.deb
 /opt/rocos/app/bin/rocosAppMain --check_config --config=/opt/rocos/config/app.yaml
 ```
 
@@ -33,8 +33,8 @@ Viz 单独安装到 `/opt/rocos/web`，与 `app.yaml` 中 `web_root: ../web` 对
 2. 在该提交上创建同号标签并推送，例如：
 
    ```bash
-   git tag -a v3.2.0-rc.1 -m 'Internal release 3.2.0-rc.1'
-   git push origin v3 v3.2.0-rc.1
+   git tag -a v3.2.0-rc.2 -m 'Internal release 3.2.0-rc.2'
+   git push origin v3 v3.2.0-rc.2
    ```
 
 3. `Build and release DEB` 工作流构建、运行离线测试、检查解包配置，并上传安装包、`release.json`、`SHA256SUMS` 到本仓库 Release。带 rc 的标签发布为 **Prerelease**。先上传到草稿，校验 GitHub 返回的 SHA256 后公开。
