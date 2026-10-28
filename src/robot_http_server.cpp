@@ -17,6 +17,7 @@
 
 #include "lua_script_engine.hpp"
 #include "robot.hpp"
+#include "robot_info_json.hpp"
 #include "tool_package_json.hpp"
 
 namespace rocos {
@@ -934,23 +935,8 @@ void RobotHttpServer::handleGetTcpPose(const httplib::Request& req, httplib::Res
 void RobotHttpServer::handleGetRobotInfo(const httplib::Request& req, httplib::Response& res) {
     log_ptr_->info("GET /api/robot/info");
 
-    nlohmann::json joint_infos = nlohmann::json::array();
-    for (const auto& info : robot_->GetJointInfo()) {
-        nlohmann::json ji;
-        ji["id"] = info.id;
-        ji["name"] = info.name;
-        ji["cnt_per_unit"] = info.cnt_per_unit;
-        ji["torque_per_unit"] = info.torque_per_unit;
-        ji["ratio"] = info.ratio;
-        ji["unit_name"] = info.unit_name;
-        ji["zero_offset"] = info.zero_offset;
-        joint_infos.push_back(ji);
-    }
-
-    nlohmann::json data;
-    data["joint_infos"] = joint_infos;
-
-    sendJson(res, true, 0, "ok", data);
+    sendJson(res, true, 0, "ok",
+             robotInfoJson(robot_ ? robot_->GetJointInfo() : std::vector<Robot::JointInfo>{}));
 }
 
 void RobotHttpServer::handleGetRobotModel(const httplib::Request& req, httplib::Response& res) {

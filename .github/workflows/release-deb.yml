@@ -1,0 +1,45 @@
+name: Build and release DEB
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: deb-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  deb:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake g++ make dpkg-dev patchelf libboost-all-dev libyaml-cpp-dev libeigen3-dev liborocos-kdl-dev liburdfdom-dev libtinyxml-dev libtinyxml2-dev libarchive-dev libssl-dev
+      - name: Build controller and offline regression tests
+        run: |
+          cmake -S . -B build/deb-release -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/deb-release --parallel 2 --target rocosAppMain http_control_rights_test app_config_test tool_package_test tooling_http_test
+          ctest --test-dir build/deb-release --output-on-failure -R '^(http_control_rights_test|app_config_test|tool_package_test|tooling_http_test)$'
+      - name: Package and check configuration without hardware
+        run: |
+          python3 packaging/build_deb.py
+          dpkg-deb --info build/packages/*.deb
+          dpkg-deb --extract build/packages/*.deb build/package-check
+          env -u LD_LIBRARY_PATH build/package-check/opt/rocos/app/bin/rocosAppMain --check_config --config=build/package-check/opt/rocos/config/app.yaml
+          cd build/packages && sha256sum -c SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rocos-app-deb
+          path: build/packages/
+      - name: Publish source repository release
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 packaging/publish_release.py build/packages

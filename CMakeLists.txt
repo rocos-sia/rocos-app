@@ -23,12 +23,12 @@ email: luoyang@sia.cn
 ]]
 
 cmake_minimum_required(VERSION 3.15)
-project(rocos_app VERSION 3.1.0 DESCRIPTION "ROCOS Application Library")
+project(rocos_app VERSION 3.2.0 DESCRIPTION "ROCOS Application Library")
 find_package(LibArchive REQUIRED)
 find_package(OpenSSL REQUIRED)
 
 # CMake VERSION 仅接受数字；完整 SemVer 版本单独拼接。
-set(ROCOS_APP_VERSION_PRERELEASE "")
+set(ROCOS_APP_VERSION_PRERELEASE "rc.1")
 set(ROCOS_APP_VERSION_FULL "${PROJECT_VERSION}")
 if(NOT ROCOS_APP_VERSION_PRERELEASE STREQUAL "")
     string(APPEND ROCOS_APP_VERSION_FULL "-${ROCOS_APP_VERSION_PRERELEASE}")

@@ -24,6 +24,12 @@ ROCOS-App is the application of robotics, which is designed as the robot control
 
 已接入 Viz 的真实工具管理、六点采集与标定计算。工具保存到 `robot.frames` 指定的 YAML，支持重命名、激活与重启恢复；标定计算后需明确保存并单独激活。操作顺序、坐标约定和接口衔接见 [六点法标定与工具管理](docs/tool_calibration.md)。
 
+## 控制器信息基线
+
+`GET /api/robot/info` 保留原有 `joint_infos`，增加 `info_schema_version: 1`、`controller`、`robot`、`master`、`slaves` 和 `slaves_complete`。App 编译版本、编译所用共享内存 ABI 及既有关节配置已提供；机器人身份、模型元数据、主站/ECM 版本及从站身份等尚未接入的值为 `null`，不会返回虚构版本或序列号。主站与机器人分组标记 `source: placeholder`；从站条目目前只来自驱动配置，`slaves_complete: false`，不表示已完成总线扫描或设备在线。
+
+该接口只读、无需控制权，也不刷新控制权 TTL。Viz 连接后读取，可手动刷新；后续接入真实采集时保持字段、类型、单位和来源语义一致。字段规范以 [Apifox ROCOS API](https://app.apifox.com/project/8387612) 为准，API 契约版本、App 软件版本和信息模型版本相互独立。
+
 ## Dependencies
 
 - orocos-kdl
@@ -106,3 +112,7 @@ ctest --preset debug -R '^move_joint_test$'
 :bust_in_silhouette: **Yang Luo (luoyang@sia.cn)**
 
 :framed_picture: Icon Designed by :**Yuhan Ying (1027649507@qq.com)**
+
+## DEB 发布
+
+见 [DEB 打包与内测发布](docs/releases.md)。
