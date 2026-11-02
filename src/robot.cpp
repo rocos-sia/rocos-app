@@ -28,7 +28,6 @@
 #include <fstream>
 #include <filesystem>
 #include <type_traits>
-#include <kdl_parser/kdl_parser.hpp>  // 用于将urdf文件解析为KDL::Tree
 #include <sstream>
 
 #include "cartesian_impedance_controller.hpp"
@@ -139,7 +138,7 @@ namespace {
         return oss.str();
     }
 
-    rocos::Twist rotateTwist(const rocos::Twist &twist, const KDL::Rotation &rotation) {
+    rocos::Twist rotateTwist(const rocos::Twist &twist, const rocos::Rotation &rotation) {
         return rocos::Twist(rotation * twist.vel, rotation * twist.rot);
     }
 
@@ -861,7 +860,7 @@ namespace rocos {
             }
 
             // 辨识完成后回写 Robot 层并落盘，供下次启动跳过辨识
-            zfd->SetLoadParamsCallback([this](double mass, const KDL::Vector& com) {
+            zfd->SetLoadParamsCallback([this](double mass, const rocos::Vector& com) {
                 load_mass_ = mass;
                 load_com_ = com;
                 load_params_valid_ = true;
@@ -1068,7 +1067,7 @@ namespace rocos {
                 tool->second.name != context["tool"]["name"].as<std::string>() ||
                 tool->second.version != context["tool"]["package_version"].as<std::string>() ||
                 (context["tool"]["digest"] && tool->second.digest != context["tool"]["digest"].as<std::string>()) ||
-                !KDL::Equal(tool->second.mount, ToolPackageFiles::pose(context["tool_install"]), 1e-9)) {
+                !rocos::Equal(tool->second.mount, ToolPackageFiles::pose(context["tool_install"]), 1e-9)) {
                 log_ptr_->error("Payload save conflicts with the recorded tool installation context.");
                 return Result::ResourceUnavailable;
             }
@@ -1661,7 +1660,7 @@ namespace rocos {
                               double timeout,
                               double dir_threshold) {
         auto command_lock = LockToolState();
-        KDL::Rotation R_base_frame = KDL::Rotation::Identity();
+        rocos::Rotation R_base_frame = rocos::Rotation::Identity();
 
         switch (frame) {
             case JogFrame::BASE:

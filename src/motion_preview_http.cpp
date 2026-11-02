@@ -88,7 +88,7 @@ void RobotHttpServer::handlePreviewMotion(const httplib::Request& req,
             return;
         }
         request.pose = Frame(
-            KDL::Rotation::Quaternion(x / norm, y / norm, z / norm, w / norm),
+            Rotation::Quaternion(x / norm, y / norm, z / norm, w / norm),
             Vector(pose["position"]["x"], pose["position"]["y"],
                    pose["position"]["z"]));
     }

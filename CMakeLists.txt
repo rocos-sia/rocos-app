@@ -28,7 +28,7 @@ find_package(LibArchive REQUIRED)
 find_package(OpenSSL REQUIRED)
 
 # CMake VERSION 仅接受数字；完整 SemVer 版本单独拼接。
-set(ROCOS_APP_VERSION_PRERELEASE "rc.3")
+set(ROCOS_APP_VERSION_PRERELEASE "rc.4")
 set(ROCOS_APP_VERSION_FULL "${PROJECT_VERSION}")
 if(NOT ROCOS_APP_VERSION_PRERELEASE STREQUAL "")
     string(APPEND ROCOS_APP_VERSION_FULL "-${ROCOS_APP_VERSION_PRERELEASE}")
@@ -68,7 +68,7 @@ find_package(Eigen3 REQUIRED)
 
 # find_package(rocos_ecm REQUIRED)
 
-find_package(orocos_kdl REQUIRED)
+find_package(pinocchio 3.9.0 EXACT REQUIRED CONFIG)
 
 ##################
 ##   3rdparty   ##
@@ -79,8 +79,7 @@ endif()
 option(ROCOS_SHM_BUILD_TESTS "Build offline v2 IPC tests" ON)
 add_subdirectory(3rdparty/rocos-shm)
 add_subdirectory(3rdparty/nlopt)
-add_subdirectory(3rdparty/trac_ik)
-add_subdirectory(3rdparty/kdl_parser)
+include(cmake/pin_ik.cmake)
 add_subdirectory(3rdparty/ruckig)
 add_subdirectory(3rdparty/plog)
 #add_subdirectory(3rdparty/gripper)
@@ -206,12 +205,11 @@ target_link_libraries(robot
         ${DEP_LIBS}
         $<BUILD_INTERFACE:rocos::logger>
         $<BUILD_INTERFACE:ruckig::ruckig>
-        $<BUILD_INTERFACE:trac_ik>
         sml::sml
         sol2::sol2
-        orocos-kdl
         sockpp
         )
+target_link_libraries(robot PRIVATE pin_ik pinocchio::pinocchio tinyxml2)
 add_library(rocos::robot ALIAS robot)
 
 
@@ -314,6 +312,14 @@ configure_file(include/ver.h.in ver.h) # Version Definition
 #############
 
 enable_testing()
+add_executable(math_types_test test/math_types_test.cc)
+target_include_directories(math_types_test PRIVATE ${CMAKE_SOURCE_DIR})
+target_link_libraries(math_types_test PRIVATE Eigen3::Eigen)
+add_test(NAME math_types_test COMMAND math_types_test)
+add_executable(model_reference_test test/model_reference_test.cc)
+target_link_libraries(model_reference_test PRIVATE robot)
+target_compile_definitions(model_reference_test PRIVATE ROCOS_MODEL_REFERENCE="${CMAKE_SOURCE_DIR}/test/data/talon_kdl_reference.json")
+add_test(NAME model_reference_test COMMAND model_reference_test)
 add_executable(shared_memory_config_test test/shared_memory_config_test.cc)
 target_link_libraries(shared_memory_config_test PRIVATE robot)
 add_test(NAME shared_memory_config_test COMMAND shared_memory_config_test)
@@ -337,6 +343,7 @@ set_tests_properties(robot_fsm_test PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
 add_executable(hardware_test test/hardware_test.cc)
+target_compile_definitions(hardware_test PRIVATE ROCOS_HARDWARE_TEST_DATA="${CMAKE_SOURCE_DIR}/test/data/hardware")
 target_link_libraries(hardware_test
         PRIVATE
         robot
@@ -595,7 +602,7 @@ foreach(resource config)
          "${ROCOS_OFFLINE_TEST_DIRECTORY}/${resource}" SYMBOLIC)
 endforeach()
 set_tests_properties(
-    model_test hardware_test shared_memory_config_test position_controller_test
+    model_test model_reference_test hardware_test shared_memory_config_test position_controller_test
     joint_admittance_controller_test joint_impedance_controller_test
     cartesian_impedance_controller_test unit_velocity_profile_test
     performance_profiler_test move_joint_test move_servo_test move_line_test
@@ -606,15 +613,15 @@ set_tests_properties(
 
 add_executable(tool_calibration_test test/tool_calibration_test.cc src/tool_calibration.cpp)
 target_include_directories(tool_calibration_test PRIVATE ${CMAKE_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/src)
-target_link_libraries(tool_calibration_test PRIVATE Eigen3::Eigen orocos-kdl)
+target_link_libraries(tool_calibration_test PRIVATE Eigen3::Eigen)
 add_test(NAME tool_calibration_test COMMAND tool_calibration_test)
 add_executable(frame_registry_test test/frame_registry_test.cc src/frame_registry.cpp src/tool_package.cpp)
 target_include_directories(frame_registry_test PRIVATE ${CMAKE_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/src)
-target_link_libraries(frame_registry_test PRIVATE yaml-cpp orocos-kdl LibArchive::LibArchive OpenSSL::Crypto tinyxml2)
+target_link_libraries(frame_registry_test PRIVATE yaml-cpp Eigen3::Eigen LibArchive::LibArchive OpenSSL::Crypto tinyxml2)
 add_test(NAME frame_registry_test COMMAND frame_registry_test)
 add_executable(tool_package_test test/tool_package_test.cc src/frame_registry.cpp src/tool_package.cpp)
 target_include_directories(tool_package_test PRIVATE ${CMAKE_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/src)
-target_link_libraries(tool_package_test PRIVATE yaml-cpp orocos-kdl LibArchive::LibArchive OpenSSL::Crypto tinyxml2)
+target_link_libraries(tool_package_test PRIVATE yaml-cpp Eigen3::Eigen LibArchive::LibArchive OpenSSL::Crypto tinyxml2)
 add_test(NAME tool_package_test COMMAND tool_package_test)
 add_executable(tooling_http_test test/tooling_http_test.cc)
 target_link_libraries(tooling_http_test PRIVATE robot)

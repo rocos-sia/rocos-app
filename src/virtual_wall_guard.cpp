@@ -274,7 +274,7 @@ Result VirtualWallGuard::GenerateCmd(const Reference& ref_in,
         if (d_target >= 0.0) {
             const Vector n = wallNormal(wall, current_pos);
             const Vector delta = target_pos - current_pos;
-            const double v_n = KDL::dot(delta, n);  // 法向速度分量
+            const double v_n = rocos::dot(delta, n);  // 法向速度分量
 
             if (d_curr >= 0.0 && v_n > 0.0) {
                 // 已在禁止区 + 继续向禁止方向移动 → 硬拦截
@@ -294,7 +294,7 @@ Result VirtualWallGuard::GenerateCmd(const Reference& ref_in,
         if (d_target > -wd) {
             const Vector n = wallNormal(wall, current_pos);
             const Vector delta = target_pos - current_pos;
-            const double v_n = KDL::dot(delta, n);
+            const double v_n = rocos::dot(delta, n);
 
             if (v_n > 0.0) {
                 // 向禁止侧移动 → 只缩减法向分量，切向保持全速

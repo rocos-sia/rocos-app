@@ -1,6 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "src/motion_preview.hpp"
 
+#include <future>
 #include <limits>
 
 #include "src/model.hpp"
@@ -40,6 +41,61 @@ struct Fixture {
     }
 };
 }  // namespace
+
+TEST_CASE_FIXTURE(
+    Fixture, "Preview clone preserves configuration and owns its workspaces") {
+    request.start_joints(1) = M_PI / 3;
+    request.start_joints(3) = M_PI / 2;
+    request.start_joints(5) = -M_PI / 3;
+    auto lower = model.GetPosLowerLimit();
+    auto upper = model.GetPosUpperLimit();
+    upper(0) = 0.5;
+    model.SetPosLimits(lower, upper);
+    model.SetGravity(Vector(0, -9.81, 0));
+    auto copy = model.CloneForPreview();
+    CHECK(copy->GetJointNames() == model.GetJointNames());
+    CHECK(copy->GetPosUpperLimit().data.isApprox(upper.data));
+    CHECK(
+        copy->GetVelocityLimit().data.isApprox(model.GetVelocityLimit().data));
+    CHECK(copy->GetEffortLimit().data.isApprox(model.GetEffortLimit().data));
+    Frame expected;
+    REQUIRE(model.ForwardKinematics(request.start_joints, expected) ==
+            Result::NoError);
+    JntArray zero(model.GetJointNum()), source_torque, clone_torque;
+    REQUIRE(model.InverseDynamics(request.start_joints, zero, zero, {},
+                                  source_torque) == Result::NoError);
+    REQUIRE(copy->InverseDynamics(request.start_joints, zero, zero, {},
+                                  clone_torque) == Result::NoError);
+    CHECK(clone_torque.data.isApprox(source_torque.data));
+    copy->SetGravity(Vector::Zero());
+    upper(0) = 0.3;
+    copy->SetPosLimits(lower, upper);
+    CHECK(model.GetPosUpperLimit()(0) == doctest::Approx(0.5));
+    REQUIRE(copy->InverseDynamics(request.start_joints, zero, zero, {},
+                                  clone_torque) == Result::NoError);
+    CHECK(clone_torque.data.norm() < 1e-10);
+    JntArray unchanged;
+    REQUIRE(model.InverseDynamics(request.start_joints, zero, zero, {},
+                                  unchanged) == Result::NoError);
+    CHECK(unchanged.data.isApprox(source_torque.data));
+    auto check_fk = [](Model& target, JntArray q, Frame expected_pose) {
+        for (int i = 0; i < 100; ++i) {
+            Frame actual;
+            if (target.ForwardKinematics(q, actual) != Result::NoError ||
+                !Equal(actual, expected_pose, 1e-10))
+                return false;
+        }
+        return true;
+    };
+    auto other = request.start_joints;
+    other(0) = 0.2;
+    Frame other_pose;
+    REQUIRE(copy->ForwardKinematics(other, other_pose) == Result::NoError);
+    auto worker = std::async(std::launch::async, check_fk, std::ref(model),
+                             request.start_joints, expected);
+    CHECK(check_fk(*copy, other, other_pose));
+    CHECK(worker.get());
+}
 
 TEST_CASE_FIXTURE(
     Fixture,
@@ -162,7 +218,8 @@ TEST_CASE_FIXTURE(Fixture,
                 Result::NoError);
         CHECK(output.duration > 0);
         REQUIRE(output.points.size() > 1);
-        const auto error = KDL::diff(output.points.back().flange, request.pose);
+        const auto error =
+            rocos::diff(output.points.back().flange, request.pose);
         CHECK(error.vel.Norm() < 1e-4);
         CHECK(error.rot.Norm() < 1e-3);
     }

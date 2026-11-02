@@ -173,7 +173,7 @@ Frame MoveLineOffline::interpolatePose(double s) const {
 
     // 旋转：Eigen::Quaterniond::slerp
     Eigen::Quaterniond q_interp = q_start_.slerp(s, q_end_);
-    result.M = KDL::Rotation::Quaternion(
+    result.M = rocos::Rotation::Quaternion(
         q_interp.x(), q_interp.y(), q_interp.z(), q_interp.w());
 
     return result;
@@ -189,10 +189,10 @@ Frame MoveLineOffline::interpolatePose(double s) const {
 
 Twist MoveLineOffline::computeCartesianTwist(double s_dot) const {
     // 平移速度
-    KDL::Vector v = (pose_goal_.p - pose_start_.p) * s_dot;
+    rocos::Vector v = (pose_goal_.p - pose_start_.p) * s_dot;
 
     // 旋转角速度
-    KDL::Vector omega(rot_axis_.x() * total_angle_ * s_dot,
+    rocos::Vector omega(rot_axis_.x() * total_angle_ * s_dot,
                        rot_axis_.y() * total_angle_ * s_dot,
                        rot_axis_.z() * total_angle_ * s_dot);
 

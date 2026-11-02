@@ -1020,12 +1020,12 @@ private:
         }
 
         return Frame(
-            KDL::Rotation::Quaternion(
+            rocos::Rotation::Quaternion(
                 pose_.qx / norm_,
                 pose_.qy / norm_,
                 pose_.qz / norm_,
                 pose_.qw / norm_),
-            KDL::Vector(pose_.x, pose_.y, pose_.z));
+            rocos::Vector(pose_.x, pose_.y, pose_.z));
     }
 
     // ---- Lua table ↔ C++ 类型转换辅助 ----

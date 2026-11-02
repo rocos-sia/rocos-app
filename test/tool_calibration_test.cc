@@ -4,27 +4,27 @@
 #include <limits>
 
 namespace {
-std::array<KDL::Frame, 6> fixture(const KDL::Frame& tool) {
-    const KDL::Vector pivot(0.5, -0.2, 0.4);
-    std::array<KDL::Frame, 6> points;
-    points[0].M = KDL::Rotation::RPY(0.6, -0.3, 0.2);
-    points[1].M = KDL::Rotation::RPY(-0.4, 0.7, -0.5);
-    points[2].M = KDL::Rotation::RPY(0.3, 0.4, 0.8);
-    points[3].M = KDL::Rotation::RPY(-0.2, -0.3, 0.4);
+std::array<rocos::Frame, 6> fixture(const rocos::Frame& tool) {
+    const rocos::Vector pivot(0.5, -0.2, 0.4);
+    std::array<rocos::Frame, 6> points;
+    points[0].M = rocos::Rotation::RPY(0.6, -0.3, 0.2);
+    points[1].M = rocos::Rotation::RPY(-0.4, 0.7, -0.5);
+    points[2].M = rocos::Rotation::RPY(0.3, 0.4, 0.8);
+    points[3].M = rocos::Rotation::RPY(-0.2, -0.3, 0.4);
     for (int i = 0; i < 4; ++i) points[i].p = pivot - points[i].M * tool.p;
     points[4] = points[3]; points[5] = points[3];
-    points[4].p = points[4].p + points[3].M * tool.M * KDL::Vector(0.07, 0, 0);
-    points[5].p = points[5].p + points[3].M * tool.M * KDL::Vector(0, 0, 0.08);
+    points[4].p = points[4].p + points[3].M * tool.M * rocos::Vector(0.07, 0, 0);
+    points[5].p = points[5].p + points[3].M * tool.M * rocos::Vector(0, 0, 0.08);
     return points;
 }
 }
 
 TEST_CASE("Six point calibration recovers a nontrivial TCP and right handed tool rotation") {
-    const KDL::Frame expected(KDL::Rotation::RPY(0.4, -0.5, 1.2), KDL::Vector(0.03, -0.02, 0.18));
+    const rocos::Frame expected(rocos::Rotation::RPY(0.4, -0.5, 1.2), rocos::Vector(0.03, -0.02, 0.18));
     rocos::ToolCalibrationSolution result;
     std::string error;
     REQUIRE(rocos::solveSixPointTool(fixture(expected), 0.001, result, error));
-    CHECK(KDL::Equal(result.frame, expected, 1e-9));
+    CHECK(rocos::Equal(result.frame, expected, 1e-9));
     CHECK(result.rms_error < 1e-12);
     CHECK(result.max_error < 1e-12);
     CHECK(result.condition_number >= 1);
@@ -32,8 +32,8 @@ TEST_CASE("Six point calibration recovers a nontrivial TCP and right handed tool
 }
 
 TEST_CASE("Six point calibration measures pivot residual and rejects excessive error") {
-    auto points = fixture(KDL::Frame(KDL::Vector(0, 0, 0.2)));
-    points[0].p = points[0].p + KDL::Vector(0.0001, 0, 0);
+    auto points = fixture(rocos::Frame(rocos::Vector(0, 0, 0.2)));
+    points[0].p = points[0].p + rocos::Vector(0.0001, 0, 0);
     rocos::ToolCalibrationSolution result;
     std::string error;
     REQUIRE(rocos::solveSixPointTool(points, 0.001, result, error));
@@ -43,7 +43,7 @@ TEST_CASE("Six point calibration measures pivot residual and rejects excessive e
 }
 
 TEST_CASE("Six point calibration rejects repeated poses bad directions and changed orientation") {
-    const auto valid = fixture(KDL::Frame(KDL::Vector(0, 0, 0.2)));
+    const auto valid = fixture(rocos::Frame(rocos::Vector(0, 0, 0.2)));
     rocos::ToolCalibrationSolution result;
     std::string error;
     SUBCASE("identical orientations") {
@@ -63,7 +63,7 @@ TEST_CASE("Six point calibration rejects repeated poses bad directions and chang
         CHECK(error.find("1 mm") != std::string::npos);
     }
     SUBCASE("orientation changes after point four") {
-        auto points = valid; points[4].M = points[3].M * KDL::Rotation::RotX(0.1);
+        auto points = valid; points[4].M = points[3].M * rocos::Rotation::RotX(0.1);
         CHECK_FALSE(rocos::solveSixPointTool(points, 0.001, result, error));
         CHECK(error.find("orientation") != std::string::npos);
     }

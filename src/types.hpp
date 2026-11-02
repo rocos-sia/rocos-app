@@ -18,17 +18,8 @@
 // email: luoyang@sia.cn
 #pragma once
 
-#include <kdl/utilities/utility.h>
-
-#include <kdl/chain.hpp>
-#include <kdl/chainfdsolver.hpp>
-#include <kdl/chainfksolver.hpp>
-#include <kdl/chainidsolver.hpp>
-#include <kdl/chainiksolver.hpp>
-#include <kdl/frames.hpp>
-#include <kdl/jacobian.hpp>
-#include <kdl/jntarray.hpp>
-#include <kdl/tree.hpp>
+#include "math_types.hpp"
+#include <cstdint>
 
 #include <variant>
 
@@ -39,19 +30,6 @@ namespace rocos {
     ERROR
   };
 
-
-  using Vector = KDL::Vector;
-  using Jacobian = KDL::Jacobian;
-  using JntArray = KDL::JntArray;
-  using Frame = KDL::Frame;
-  using Wrench = KDL::Wrench;
-  using Chain = KDL::Chain;
-  using Tree  = KDL::Tree;
-  using ChainIkSolverPos = KDL::ChainIkSolverPos;
-  using ChainFkSolverPos = KDL::ChainFkSolverPos;
-  using ChainFdSolver = KDL::ChainFdSolver;
-  using ChainIdSolver = KDL::ChainIdSolver;
-  using Twist = KDL::Twist;
 
   typedef std::variant<JntArray, Frame> Reference;
   typedef std::variant<JntArray, Twist> JogVec; //点动方向向量

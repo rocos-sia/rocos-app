@@ -34,7 +34,7 @@ bool FrameRegistry::validName(const std::string& name) {
               (ch >= '0' && ch <= '9') || ch == '_' || ch == '-' || ch == '.')) return false;
     return true;
 }
-bool FrameRegistry::validFrame(const KDL::Frame& frame) {
+bool FrameRegistry::validFrame(const rocos::Frame& frame) {
     for (int i = 0; i < 3; ++i) {
         if (!std::isfinite(frame.p[i])) return false;
         for (int j = 0; j < 3; ++j) {
@@ -44,13 +44,13 @@ bool FrameRegistry::validFrame(const KDL::Frame& frame) {
             if (std::abs(dot - (i == j ? 1 : 0)) > 1e-6) return false;
         }
     }
-    return KDL::dot(frame.M.UnitX() * frame.M.UnitY(), frame.M.UnitZ()) > 1 - 1e-6;
+    return rocos::dot(frame.M.UnitX() * frame.M.UnitY(), frame.M.UnitZ()) > 1 - 1e-6;
 }
 std::shared_ptr<const FrameRegistryState> FrameRegistry::snapshot() const {
     return std::atomic_load(&state_);
 }
-Result FrameRegistry::resolveTcp(const FrameRegistryState& state, const KDL::Frame& flange,
-                                 KDL::Frame& tcp, const std::string& tool_name) {
+Result FrameRegistry::resolveTcp(const FrameRegistryState& state, const rocos::Frame& flange,
+                                 rocos::Frame& tcp, const std::string& tool_name) {
     if (!validFrame(flange)) return Result::FkCalcFail;
     const auto& name = tool_name.empty() ? state.active_tool : tool_name;
     if (name.empty()) { tcp = flange; return Result::NoError; }
@@ -70,7 +70,7 @@ std::vector<std::string> FrameRegistry::names(bool tool) const {
     for (const auto& item : frames) names.push_back(item.first);
     return names;
 }
-Result FrameRegistry::get(const std::string& name, bool tool, KDL::Frame& frame) const {
+Result FrameRegistry::get(const std::string& name, bool tool, rocos::Frame& frame) const {
     auto state = snapshot();
     const auto& frames = tool ? state->tools : state->objects;
     auto found = frames.find(name);
@@ -86,7 +86,7 @@ Result FrameRegistry::publish(std::shared_ptr<FrameRegistryState> next, bool per
     std::atomic_store(&state_, std::shared_ptr<const FrameRegistryState>(std::move(next)));
     return Result::NoError;
 }
-Result FrameRegistry::set(const std::string& name, const KDL::Frame& frame, bool tool,
+Result FrameRegistry::set(const std::string& name, const rocos::Frame& frame, bool tool,
                           bool add_only, bool persist, const std::string& previous_name) {
     if (!validName(name) || !validFrame(frame)) return Result::IllegalParameter;
     std::lock_guard<std::mutex> lock(writer_mutex_);
@@ -206,8 +206,8 @@ Result FrameRegistry::load(const std::string& path) {
                 double x = q[0].as<double>(), y = q[1].as<double>(), z = q[2].as<double>(), w = q[3].as<double>();
                 const double norm = std::sqrt(x*x + y*y + z*z + w*w);
                 if (!std::isfinite(norm) || norm < 1e-12) return Result::IllegalParameter;
-                KDL::Frame frame(KDL::Rotation::Quaternion(x/norm, y/norm, z/norm, w/norm),
-                    KDL::Vector(pos[0].as<double>(), pos[1].as<double>(), pos[2].as<double>()));
+                rocos::Frame frame(rocos::Rotation::Quaternion(x/norm, y/norm, z/norm, w/norm),
+                    rocos::Vector(pos[0].as<double>(), pos[1].as<double>(), pos[2].as<double>()));
                 if (!validFrame(frame) || frames.count(name)) return Result::IllegalParameter;
                 frames.emplace(name, frame);
             }
@@ -280,7 +280,7 @@ void FrameRegistry::initializePackage(const ToolPackage& configured) {
     next->active_tool = configured.name;
     publish(std::move(next), false);
 }
-void FrameRegistry::updatePackage(const std::string& name, const KDL::Frame& mount, const KDL::Frame& tcp,
+void FrameRegistry::updatePackage(const std::string& name, const rocos::Frame& mount, const rocos::Frame& tcp,
                                   const std::string& digest, uint64_t revision, const YAML::Node& calibration) {
     if (!validFrame(mount) || !validFrame(tcp) || !validFrame(mount*tcp)) throw std::invalid_argument("Invalid installation or TCP transform");
     std::lock_guard<std::mutex> lock(writer_mutex_);

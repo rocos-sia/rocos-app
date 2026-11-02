@@ -4,7 +4,7 @@ import argparse
 from pathlib import Path
 import re
 import tempfile
-from deb_common import copy_tracked, finish, licenses, run, stage_runtime
+from deb_common import copy_file, copy_tracked, finish, licenses, run, stage_runtime
 
 root = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
@@ -28,6 +28,10 @@ with tempfile.TemporaryDirectory(prefix='rocos-app-deb-') as tmp:
     copy_tracked(root, stage, 'config', 'opt/rocos/config')
     (stage / 'opt/rocos/web').mkdir()  # Viz owns the contents; App validates this directory.
     licenses(root, stage, 'app')
+    copy_file(root / '3rdparty/pin_ik/LICENSE.txt',
+              stage / 'usr/share/doc/rocos-app/licenses/pin_ik/LICENSE.txt')
+    copy_file(build / 'deps/prefix/share/licenses/pinocchio/LICENSE',
+              stage / 'usr/share/doc/rocos-app/licenses/pinocchio/LICENSE')
     finish(stage, output, 'app', version, arch,
            {'api_version': '3.0.0', 'shm_abi_version': 2},
            'ROCOS robot controller (Ubuntu 22.04)', elves, stage / 'opt/rocos/app/lib')

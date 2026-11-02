@@ -29,6 +29,8 @@ config/
 
 主程序不再内嵌源码目录路径。未传 `--config` 时只读取 `/opt/rocos/config/app.yaml`；源码运行必须显式指定入口，没有自动目录搜索或回退。
 
+Talon 七个活动关节使用 URDF `revolute` 类型，模型位置、速度、力矩限制以标准 `<joint><limit lower="…" upper="…" velocity="…" effort="…"/>` 为准；URDF 中已移除 `<hardware>` 扩展块，驱动器、PDO、换算参数及 acc/jerk 等硬件配置统一放在 `robots/talon/hardware.yaml`，由硬件层读取。详见[后端迁移说明](../docs/pinocchio_backend_migration.md)。
+
 ```bash
 cmake --build --preset release --parallel 2
 # 不连接硬件、不启动 HTTP；检查配置、模型和绑定

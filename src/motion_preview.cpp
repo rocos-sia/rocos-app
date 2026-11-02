@@ -102,7 +102,7 @@ Result GenerateMotionPreview(ModelInterface& model,
         Frame end;
         rc = model.ForwardKinematics(samples.back(), end);
         if (rc != Result::NoError) return rc;
-        const auto error = KDL::diff(end, target_pose);
+        const auto error = rocos::diff(end, target_pose);
         if (error.vel.Norm() > 1e-4 || error.rot.Norm() > 1e-3)
             return Result::PlanError;
     }

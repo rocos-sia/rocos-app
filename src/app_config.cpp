@@ -403,7 +403,7 @@ void calibrationContext(const Node& context, const Node& device, const Node& rob
     poseKeys(context["tool_install"], where + ".context.tool_install", true);
     require(context["tool_install"]["parent_link"].as<std::string>() ==
                     device["tool_install"]["parent_link"].as<std::string>() &&
-                KDL::Equal(ToolPackageFiles::pose(context["tool_install"]),
+                rocos::Equal(ToolPackageFiles::pose(context["tool_install"]),
                            ToolPackageFiles::pose(device["tool_install"]), 1e-9),
             where + ": calibration installation mismatch");
 }

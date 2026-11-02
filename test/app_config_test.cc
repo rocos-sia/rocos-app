@@ -338,7 +338,7 @@ context:
     CHECK(snapshot->active_tool == "demo_gripper");
     CHECK(snapshot->tools.at("demo_gripper").p.x() == doctest::Approx(0.1));
     CHECK(snapshot->tools.at("demo_gripper").p.y() == doctest::Approx(0.2));
-    CHECK(KDL::Equal(snapshot->tools.at("demo_gripper"), config.robot.tool->mount * config.robot.tool->tcp, 1e-12));
+    CHECK(rocos::Equal(snapshot->tools.at("demo_gripper"), config.robot.tool->mount * config.robot.tool->tcp, 1e-12));
     record["context"]["tool_install"]["position"] = YAML::Load("[0,0,0]");
     write(directory / "overrides/results/tcp.yaml", record);
     CHECK_THROWS(rocos::AppConfig::load(entry.string()));

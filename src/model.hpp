@@ -31,7 +31,7 @@ class Model : public ModelInterface {
                  const std::string& base_link,
                  const std::string& tip);
 
-  ~Model() override = default;
+  ~Model() override;
 
   // 复制配置并创建独立求解器，不共享实时线程的可变计算状态。
   std::unique_ptr<Model> CloneForPreview() const;
@@ -53,11 +53,12 @@ class Model : public ModelInterface {
 
   void SetGravity(const Vector& gravity);
 
-  // TODO: 关节限位是给内部调用，不能外部设置，通过URDF配置
+  // 默认取 URDF 标准限位；配置变更仅允许初始化或停止计算后调用。
   void SetPosLimits(const JntArray& q_min, const JntArray& q_max);
 
   void UpdateSolvers();
 
+  // 不允许与求解或限位读取并发；失败时保留原模型。
   bool ParseUrdf(const std::string& urdf_string,
                  const std::string& base_link,
                  const std::string& tip);
@@ -66,35 +67,20 @@ class Model : public ModelInterface {
   const JntArray& GetPosUpperLimit() const override { return q_max_; }
   const JntArray& GetVelocityLimit() const override { return q_vel_; }
   const JntArray& GetEffortLimit() const override { return q_effort_; }
-  const Chain& GetChain() const noexcept { return chain_; }
 
  private:
-  Model() = default;
-  inline void SetChain(const Chain& chain) { chain_ = chain; }
+  Model();
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
 
-  bool SetChain(const Tree& tree, const std::string& base_link,
-                const std::string& tip);
+  std::vector<std::string> joint_names_;  // 模型链中可动关节名称，顺序与 JntArray 一致
 
-  Tree tree_;
-  Chain chain_;
-
-  std::vector<std::string> joint_names_;  // KDL chain 中可动关节名称，顺序与 JntArray 一致
-
-  std::string urdf_file_path_;
   std::string urdf_string_;
-
-  std::unique_ptr<ChainFkSolverPos> fk_solver_;
-  std::unique_ptr<ChainIkSolverPos> ik_solver_;
-
-  std::unique_ptr<ChainFdSolver> fd_solver_;
-  std::unique_ptr<ChainIdSolver> id_solver_;
 
   JntArray q_min_;
   JntArray q_max_;
 
   JntArray q_vel_;
-  JntArray q_acc_;
-  JntArray q_jerk_;
   JntArray q_effort_;
 
   Vector gravity_{0.0, 0.0, -9.81};

@@ -1,3 +1,9 @@
 [submodule "3rdparty/rocos-shm"]
 	path = 3rdparty/rocos-shm
 	url = https://github.com/rocos-sia/rocos-shm.git
+[submodule "3rdparty/pinocchio"]
+	path = 3rdparty/pinocchio
+	url = https://github.com/stack-of-tasks/pinocchio.git
+[submodule "3rdparty/pin_ik"]
+	path = 3rdparty/pin_ik
+	url = https://github.com/thinkexist1989/pin_ik.git

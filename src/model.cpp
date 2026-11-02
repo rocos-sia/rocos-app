@@ -1,298 +1,330 @@
+// pinocchio/fwd.hpp 必须先于其他 Boost/Eigen 头文件。
+// clang-format off
+#include <pinocchio/fwd.hpp>
+// clang-format on
 #include "model.hpp"
 
-#include <kdl/chainfdsolver_recursive_newton_euler.hpp>
-#include <kdl/chainfksolverpos_recursive.hpp>
-#include <kdl/chainidsolver_recursive_newton_euler.hpp>
-#include <trac_ik/trac_ik.hpp>
-#include <kdl_parser/kdl_parser.hpp>
 #include <tinyxml2.h>
 #include <urdf_parser/urdf_parser.h>
 
+#include <algorithm>
+#include <fstream>
 #include <limits>
-#include <string>
-#include <unordered_map>
+#include <mutex>
+#include <pin_ik/pin_ik.hpp>
+#include <pinocchio/algorithm/aba.hpp>
+#include <pinocchio/algorithm/frames.hpp>
+#include <pinocchio/algorithm/jacobian.hpp>
+#include <pinocchio/algorithm/kinematics.hpp>
+#include <pinocchio/algorithm/rnea.hpp>
+#include <pinocchio/parsers/urdf.hpp>
+#include <stdexcept>
+#include <unordered_set>
 
 namespace rocos {
-
 namespace {
-
-struct ParsedJointLimit {
-  bool has_lower{false};
-  bool has_upper{false};
-  bool has_velocity{false};
-  bool has_effort{false};
-  double lower{0.0};
-  double upper{0.0};
-  double velocity{0.0};
-  double effort{0.0};
-};
-
-std::unordered_map<std::string, ParsedJointLimit> ParseHardwareLimits(
-    const std::string& urdf_string) {
-  std::unordered_map<std::string, ParsedJointLimit> limits;
-
-  tinyxml2::XMLDocument doc;
-  if (doc.Parse(urdf_string.c_str()) != tinyxml2::XML_SUCCESS) {
-    return limits;
-  }
-
-  const auto* robot = doc.FirstChildElement("robot");
-  if (robot == nullptr) {
-    return limits;
-  }
-
-  for (const auto* joint = robot->FirstChildElement("joint");
-       joint != nullptr; joint = joint->NextSiblingElement("joint")) {
-    const char* joint_name = joint->Attribute("name");
-    if (joint_name == nullptr) {
-      continue;
-    }
-
-    const auto* hardware = joint->FirstChildElement("hardware");
-    const auto* limit = hardware != nullptr ? hardware->FirstChildElement("limit") : nullptr;
-    if (limit == nullptr) {
-      continue;
-    }
-
-    ParsedJointLimit parsed;
-    parsed.has_lower = limit->QueryDoubleAttribute("lower", &parsed.lower) == tinyxml2::XML_SUCCESS;
-    parsed.has_upper = limit->QueryDoubleAttribute("upper", &parsed.upper) == tinyxml2::XML_SUCCESS;
-    parsed.has_velocity =
-        limit->QueryDoubleAttribute("velocity", &parsed.velocity) == tinyxml2::XML_SUCCESS ||
-        limit->QueryDoubleAttribute("vel", &parsed.velocity) == tinyxml2::XML_SUCCESS;
-    parsed.has_effort = limit->QueryDoubleAttribute("effort", &parsed.effort) == tinyxml2::XML_SUCCESS;
-
-    limits[joint_name] = parsed;
-  }
-
-  return limits;
+Result failure(Result result) {
+  emitLogEvent(LogEventType::Result, LogModule::Model,
+               static_cast<int>(result));
+  return result;
+}
+bool valid(const JntArray& q, int size) {
+  return q.data.size() == size && q.data.allFinite();
+}
+bool valid(const Frame& f) {
+  return f.p.data.allFinite() && f.M.data.allFinite() &&
+         (f.M.data.transpose() * f.M.data)
+             .isApprox(Eigen::Matrix3d::Identity(), 1e-8) &&
+         std::abs(f.M.data.determinant() - 1.0) < 1e-8;
 }
 
+// 仅裁剪 base→tip 以外的拓扑；保留链内固定连杆和完整惯量。
+std::string chainXml(const std::string& xml,
+                     const std::unordered_set<std::string>& links,
+                     const std::unordered_set<std::string>& joints) {
+  tinyxml2::XMLDocument doc;
+  if (doc.Parse(xml.c_str()) != tinyxml2::XML_SUCCESS)
+    throw std::invalid_argument("Invalid URDF XML");
+  auto* root = doc.FirstChildElement("robot");
+  if (!root) throw std::invalid_argument("URDF has no robot element");
+  for (auto* element = root->FirstChildElement(); element;) {
+    auto* next = element->NextSiblingElement();
+    const std::string kind = element->Name();
+    const char* name = element->Attribute("name");
+    if ((kind == "link" && (!name || !links.count(name))) ||
+        (kind == "joint" && (!name || !joints.count(name))))
+      root->DeleteChild(element);
+    element = next;
+  }
+  tinyxml2::XMLPrinter printer;
+  doc.Print(&printer);
+  return printer.CStr();
+}
 }  // namespace
 
-Model::Model(const std::string& urdf_file_path,
-             const std::string& base_link,
+struct Model::Impl {
+  pinocchio::Model model;
+  std::unique_ptr<pinocchio::Data> data;
+  std::unique_ptr<PIN_IK::PIN_IK> ik;
+  pinocchio::FrameIndex tip{};
+  std::vector<pinocchio::FrameIndex> links;
+  Eigen::VectorXd configuration;
+  pinocchio::Data::Matrix6x jacobian;
+  pinocchio::container::aligned_vector<pinocchio::Force> external;
+  // IK 自带工作区；独立锁避免阻塞 HTTP FK 和周期动力学计算。
+  std::mutex compute_mutex, ik_mutex;
+
+  void setConfiguration(const JntArray& q) {
+    for (pinocchio::JointIndex i = 1; i < model.joints.size(); ++i) {
+      const auto& joint = model.joints[i];
+      const double value = q(joint.idx_v());
+      if (joint.nq() == 2) {
+        configuration(joint.idx_q()) = std::cos(value);
+        configuration(joint.idx_q() + 1) = std::sin(value);
+      } else
+        configuration(joint.idx_q()) = value;
+    }
+  }
+  bool setExternal(const Wrenches& forces) {
+    if (!forces.empty() && forces.size() != links.size()) return false;
+    for (auto& force : external) force.setZero();
+    for (size_t i = 0; i < forces.size(); ++i) {
+      if (!forces[i].force.data.allFinite() ||
+          !forces[i].torque.data.allFinite())
+        return false;
+      const auto& frame = model.frames[links[i]];
+      const pinocchio::Force force(forces[i].force.data, forces[i].torque.data);
+      external[frame.parentJoint] += frame.placement.act(force);
+    }
+    return true;
+  }
+};
+
+Model::~Model() = default;
+Model::Model() = default;
+Model::Model(const std::string& path, const std::string& base,
              const std::string& tip) {
   log_ptr_ = Logger::getInstance("Model");
-
-  //先根据文件路径把内容加载到urdf_string_
-  std::ifstream urdf_file(urdf_file_path);
-  if (!urdf_file) {
-    log_ptr_->error("Could not open URDF file: {}", urdf_file_path);
-    throw std::runtime_error("Could not open urdf file");
-  }
-  urdf_string_ = std::string((std::istreambuf_iterator<char>(urdf_file)),
-                             std::istreambuf_iterator<char>());
-
-  if (!ParseUrdf(urdf_string_, base_link, tip)) {
-    log_ptr_->error("Could not extract  urdf!");
-    throw std::runtime_error("Could not extract urdf");
-  }
-
-  UpdateSolvers();
+  std::ifstream file(path);
+  if (!file) throw std::runtime_error("Could not open URDF: " + path);
+  const std::string xml((std::istreambuf_iterator<char>(file)), {});
+  if (!ParseUrdf(xml, base, tip))
+    throw std::runtime_error("Could not extract supported URDF chain");
 }
 
 std::unique_ptr<Model> Model::CloneForPreview() const {
   auto copy = std::unique_ptr<Model>(new Model());
-  copy->chain_ = chain_;
-  copy->joint_names_ = joint_names_;
-  copy->q_min_ = q_min_;
-  copy->q_max_ = q_max_;
-  copy->q_vel_ = q_vel_;
-  copy->q_effort_ = q_effort_;
-  copy->gravity_ = gravity_;
-  copy->log_ptr_ = log_ptr_;
-  copy->UpdateSolvers();
+  copy->impl_ = std::make_unique<Impl>();
+  {
+    // 只在复制配置时持锁；求解器和工作区在释放源模型锁后独立创建。
+    std::scoped_lock lock(impl_->ik_mutex, impl_->compute_mutex);
+    copy->impl_->model = impl_->model;
+    copy->impl_->tip = impl_->tip;
+    copy->impl_->links = impl_->links;
+    copy->joint_names_ = joint_names_;
+    copy->urdf_string_ = urdf_string_;
+    copy->q_min_ = q_min_;
+    copy->q_max_ = q_max_;
+    copy->q_vel_ = q_vel_;
+    copy->q_effort_ = q_effort_;
+    copy->gravity_ = gravity_;
+    copy->log_ptr_ = log_ptr_;
+  }
+  auto& backend = *copy->impl_;
+  backend.data = std::make_unique<pinocchio::Data>(backend.model);
+  backend.ik = std::make_unique<PIN_IK::PIN_IK>(
+      backend.model, copy->q_min_.data, copy->q_max_.data, backend.tip);
+  backend.configuration.setZero(backend.model.nq);
+  backend.jacobian.setZero(6, backend.model.nv);
+  backend.external.resize(backend.model.njoints, pinocchio::Force::Zero());
   return copy;
 }
 
-Result Model::ForwardKinematics(const JntArray& q_in, Frame& p_out) {
-  if (fk_solver_->JntToCart(q_in, p_out) < 0) {
-    emitLogEvent(LogEventType::Result, LogModule::Model, static_cast<int>(Result::FkCalcFail));
-    return Result::FkCalcFail;
-  }
+Result Model::ForwardKinematics(const JntArray& q, Frame& out) {
+  if (!valid(q, GetJointNum())) return failure(Result::FkCalcFail);
+  std::lock_guard<std::mutex> lock(impl_->compute_mutex);
+  impl_->setConfiguration(q);
+  pinocchio::forwardKinematics(impl_->model, *impl_->data,
+                               impl_->configuration);
+  pinocchio::updateFramePlacements(impl_->model, *impl_->data);
+  const auto& pose = impl_->data->oMf[impl_->tip];
+  const Frame result(Rotation(pose.rotation()), Vector(pose.translation()));
+  if (!valid(result)) return failure(Result::FkCalcFail);
+  out = result;
   return Result::NoError;
 }
-
-Result Model::InverseKinematics(const JntArray& q_in, const Frame& p_in,
-                                JntArray& q_out) {
-  if (ik_solver_->CartToJnt(q_in, p_in, q_out) < 0) {
-    emitLogEvent(LogEventType::Result, LogModule::Model, static_cast<int>(Result::IkCalcFail));
-    return Result::IkCalcFail;
-  }
+Result Model::GetJacobian(const JntArray& q, Jacobian& out) {
+  if (!valid(q, GetJointNum())) return failure(Result::JacobianCalcFail);
+  std::lock_guard<std::mutex> lock(impl_->compute_mutex);
+  impl_->setConfiguration(q);
+  impl_->jacobian.setZero();
+  pinocchio::computeFrameJacobian(
+      impl_->model, *impl_->data, impl_->configuration, impl_->tip,
+      pinocchio::LOCAL_WORLD_ALIGNED, impl_->jacobian);
+  if (!impl_->jacobian.allFinite()) return failure(Result::JacobianCalcFail);
+  out.data = impl_->jacobian;
   return Result::NoError;
 }
-
-Result Model::ForwardDynamics(const JntArray& q, const JntArray& q_dot,
-                              const JntArray& torques, const Wrenches& f_ext,
-                              JntArray& q_dotdot) {
-  // KDL 要求 f_ext.size() == ns（段数），空 vector 会导致 E_SIZE_MISMATCH
-  // 调用方传空 vector 表示"无外力"，此处自动补齐为零旋量
-  const Wrenches* f_ext_ptr = &f_ext;
-  Wrenches f_ext_zero;
-  if (f_ext.empty()) {
-    f_ext_zero.resize(chain_.getNrOfSegments(), KDL::Wrench::Zero());
-    f_ext_ptr = &f_ext_zero;
-  }
-  if (fd_solver_->CartToJnt(q, q_dot, torques, *f_ext_ptr, q_dotdot) < 0) {
-    emitLogEvent(LogEventType::Result, LogModule::Model, static_cast<int>(Result::FdCalcFail));
-    return Result::FdCalcFail;
-  }
+Result Model::InverseDynamics(const JntArray& q, const JntArray& v,
+                              const JntArray& a, const Wrenches& forces,
+                              JntArray& out) {
+  const int n = GetJointNum();
+  if (!valid(q, n) || !valid(v, n) || !valid(a, n))
+    return failure(Result::IdCalcFail);
+  std::lock_guard<std::mutex> lock(impl_->compute_mutex);
+  if (!impl_->setExternal(forces)) return failure(Result::IdCalcFail);
+  impl_->setConfiguration(q);
+  const auto& tau =
+      pinocchio::rnea(impl_->model, *impl_->data, impl_->configuration, v.data,
+                      a.data, impl_->external);
+  if (!tau.allFinite()) return failure(Result::IdCalcFail);
+  out.data = tau;
   return Result::NoError;
 }
-
-Result Model::InverseDynamics(const JntArray& q, const JntArray& q_dot,
-                              const JntArray& q_dotdot, const Wrenches& f_ext,
-                              JntArray& torques) {
-  // KDL 要求 f_ext.size() == ns（段数），空 vector 会导致 E_SIZE_MISMATCH
-  // 调用方传空 vector 表示"无外力"，此处自动补齐为零旋量
-  const Wrenches* f_ext_ptr = &f_ext;
-  Wrenches f_ext_zero;
-  if (f_ext.empty()) {
-    f_ext_zero.resize(chain_.getNrOfSegments(), KDL::Wrench::Zero());
-    f_ext_ptr = &f_ext_zero;
-  }
-  if (id_solver_->CartToJnt(q, q_dot, q_dotdot, *f_ext_ptr, torques) < 0) {
-    emitLogEvent(LogEventType::Result, LogModule::Model, static_cast<int>(Result::IdCalcFail));
-    return Result::IdCalcFail;
-  }
+Result Model::ForwardDynamics(const JntArray& q, const JntArray& v,
+                              const JntArray& tau, const Wrenches& forces,
+                              JntArray& out) {
+  const int n = GetJointNum();
+  if (!valid(q, n) || !valid(v, n) || !valid(tau, n))
+    return failure(Result::FdCalcFail);
+  std::lock_guard<std::mutex> lock(impl_->compute_mutex);
+  if (!impl_->setExternal(forces)) return failure(Result::FdCalcFail);
+  impl_->setConfiguration(q);
+  const auto& acceleration =
+      pinocchio::aba(impl_->model, *impl_->data, impl_->configuration, v.data,
+                     tau.data, impl_->external);
+  if (!acceleration.allFinite()) return failure(Result::FdCalcFail);
+  out.data = acceleration;
   return Result::NoError;
 }
-
-Result Model::GetJacobian(const JntArray& q, Jacobian& J_out) {
-  KDL::ChainJntToJacSolver jac_solver(chain_);
-  J_out.resize(chain_.getNrOfJoints());
-  if (jac_solver.JntToJac(q, J_out) < 0) {
-    emitLogEvent(LogEventType::Result, LogModule::Model, static_cast<int>(Result::JacobianCalcFail));
-    return Result::JacobianCalcFail;
-  }
-
+Result Model::InverseKinematics(const JntArray& seed, const Frame& target,
+                                JntArray& out) {
+  if (!valid(seed, GetJointNum()) || !valid(target))
+    return failure(Result::IkCalcFail);
+  std::lock_guard<std::mutex> lock(impl_->ik_mutex);
+  Eigen::VectorXd solution;
+  const pinocchio::SE3 pose(target.M.data, target.p.data);
+  if (impl_->ik->CartToJnt(seed.data, pose, solution) <= 0 ||
+      solution.size() != GetJointNum() || !solution.allFinite())
+    return failure(Result::IkCalcFail);
+  for (int i = 0; i < solution.size(); ++i)
+    if (solution(i) < q_min_(i) || solution(i) > q_max_(i))
+      return failure(Result::IkCalcFail);
+  JntArray candidate;
+  candidate.data = solution;
+  Frame actual;
+  if (ForwardKinematics(candidate, actual) != Result::NoError ||
+      (actual.p - target.p).Norm() > 2e-5 ||
+      (actual.M.Inverse() * target.M).GetRot().Norm() > 2e-5)
+    return failure(Result::IkCalcFail);
+  out = candidate;
   return Result::NoError;
-}
-
-bool Model::SetChain(const Tree& tree, const std::string& base_link,
-                     const std::string& tip) {
-  if (!tree.getChain(base_link, tip, chain_)) {
-    // 从KDL::Tree获取运动链失败
-    log_ptr_->error("Could not get chain from kdl tree!");
-    return false;
-  }
-
-  q_min_.resize(chain_.getNrOfJoints());
-  q_max_.resize(chain_.getNrOfJoints());
-  q_vel_.resize(chain_.getNrOfJoints());
-  q_effort_.resize(chain_.getNrOfJoints());
-
-  return true;
 }
 
 void Model::SetGravity(const Vector& gravity) {
+  if (!gravity.data.allFinite())
+    throw std::invalid_argument("Gravity must be finite");
+  std::scoped_lock lock(impl_->ik_mutex, impl_->compute_mutex);
   gravity_ = gravity;
-
-  UpdateSolvers();  // 更新动力学求解器以使用新的重力向量
+  impl_->model.gravity.linear() = gravity.data;
 }
-
-void Model::SetPosLimits(const JntArray& q_min, const JntArray& q_max) {
-  q_min_ = q_min;
-  q_max_ = q_max;
-
-  UpdateSolvers();
+void Model::SetPosLimits(const JntArray& lower, const JntArray& upper) {
+  std::lock_guard<std::mutex> lock(impl_->ik_mutex);
+  auto next = std::make_unique<PIN_IK::PIN_IK>(impl_->model, lower.data,
+                                               upper.data, impl_->tip);
+  q_min_ = lower;
+  q_max_ = upper;
+  impl_->ik = std::move(next);
 }
-
 void Model::UpdateSolvers() {
-  fk_solver_ = std::make_unique<KDL::ChainFkSolverPos_recursive>(chain_);
-  ik_solver_ = std::make_unique<TRAC_IK::TRAC_IK>(chain_, q_min_, q_max_);
-
-  fd_solver_ = std::make_unique<KDL::ChainFdSolver_RNE>(chain_, gravity_);
-  id_solver_ = std::make_unique<KDL::ChainIdSolver_RNE>(chain_, gravity_);
-
+  std::scoped_lock lock(impl_->ik_mutex, impl_->compute_mutex);
+  impl_->ik = std::make_unique<PIN_IK::PIN_IK>(impl_->model, q_min_.data,
+                                               q_max_.data, impl_->tip);
 }
 
-bool Model::ParseUrdf(const std::string& urdf_string,
-                      const std::string& base_link, const std::string& tip) {
-  static const double kDefaultLowerLimit = -KDL::PI;  // -180 deg
-  static const double kDefaultUpperLimit = KDL::PI;   //  180 deg
-  static const double kDefaultVelocityLimit = std::numeric_limits<double>::infinity();
-  static const double kDefaultEffortLimit = std::numeric_limits<double>::infinity();
-
-  const auto model = urdf::parseURDF(urdf_string);
-  if (model == nullptr) {
-    log_ptr_->error("Could not parse urdf string!");
+bool Model::ParseUrdf(const std::string& xml, const std::string& base,
+                      const std::string& tip) {
+  // 与原接口一致，仅允许初始化/停止后重新加载，不支持运动中换模型。
+  try {
+    const auto source = urdf::parseURDF(xml);
+    if (!source || !source->getLink(base) || !source->getLink(tip))
+      return false;
+    std::vector<urdf::JointConstSharedPtr> chain;
+    auto link = source->getLink(tip);
+    while (link->name != base) {
+      const auto joint = link->parent_joint;
+      if (!joint || joint->mimic) return false;
+      if (joint->type != urdf::Joint::FIXED &&
+          joint->type != urdf::Joint::REVOLUTE &&
+          joint->type != urdf::Joint::CONTINUOUS &&
+          joint->type != urdf::Joint::PRISMATIC)
+        return false;
+      chain.push_back(joint);
+      link = source->getLink(joint->parent_link_name);
+      if (!link) return false;
+    }
+    std::reverse(chain.begin(), chain.end());
+    std::unordered_set<std::string> links{base}, joints;
+    std::vector<std::string> names;
+    for (const auto& joint : chain) {
+      links.insert(joint->child_link_name);
+      joints.insert(joint->name);
+      if (joint->type != urdf::Joint::FIXED) names.push_back(joint->name);
+    }
+    if (names.empty()) return false;
+    auto next = std::make_unique<Impl>();
+    pinocchio::urdf::buildModelFromXML(chainXml(xml, links, joints),
+                                       next->model);
+    next->model.gravity.linear() = gravity_.data;
+    next->data = std::make_unique<pinocchio::Data>(next->model);
+    next->tip = next->model.getFrameId(tip, pinocchio::BODY);
+    if (next->tip >= next->model.frames.size() ||
+        next->model.nv != static_cast<int>(names.size()))
+      return false;
+    JntArray lower(names.size()), upper(names.size()), velocity(names.size()),
+        effort(names.size());
+    size_t i = 0;
+    for (const auto& joint : chain) {
+      next->links.push_back(
+          next->model.getFrameId(joint->child_link_name, pinocchio::BODY));
+      if (joint->type == urdf::Joint::FIXED) continue;
+      const auto id = next->model.getJointId(joint->name);
+      if (id >= next->model.joints.size() ||
+          next->model.joints[id].idx_v() != static_cast<int>(i))
+        return false;
+      const double inf = std::numeric_limits<double>::infinity();
+      lower(i) = -inf;
+      upper(i) = inf;
+      velocity(i) = inf;
+      effort(i) = inf;
+      if (joint->limits) {
+        if (joint->type != urdf::Joint::CONTINUOUS) {
+          lower(i) = joint->limits->lower;
+          upper(i) = joint->limits->upper;
+        }
+        velocity(i) = joint->limits->velocity;
+        effort(i) = joint->limits->effort;
+      }
+      ++i;
+    }
+    next->ik = std::make_unique<PIN_IK::PIN_IK>(next->model, lower.data,
+                                                upper.data, next->tip);
+    next->configuration.setZero(next->model.nq);
+    next->jacobian.setZero(6, next->model.nv);
+    next->external.resize(next->model.njoints, pinocchio::Force::Zero());
+    impl_ = std::move(next);
+    joint_names_ = std::move(names);
+    q_min_ = lower;
+    q_max_ = upper;
+    q_vel_ = velocity;
+    q_effort_ = effort;
+    urdf_string_ = xml;
+    return true;
+  } catch (const std::exception& error) {
+    log_ptr_->error("Could not load robot model: {}", error.what());
     return false;
   }
-
-  KDL::Tree tree;
-  if (!kdl_parser::treeFromUrdfModel(*model, tree)) {
-    log_ptr_->error("Could not extract urdf to Tree!");
-    return false;
-  }
-  tree_ = tree;
-
-  if (!SetChain(tree_, base_link, tip)) {
-    log_ptr_->error("Could not set kinematic chain!");
-    return false;
-  }
-
-  const auto hardware_limits = ParseHardwareLimits(urdf_string);
-
-  // 按 Chain 中的关节顺序逐段解析 URDF limit 约束
-  unsigned int joint_index = 0;
-  for (unsigned int i = 0; i < chain_.getNrOfSegments(); ++i) {
-    const auto& kdl_joint = chain_.getSegment(i).getJoint();
-    if (kdl_joint.getType() == KDL::Joint::None) {
-      continue;  // 固定关节不占 JntArray 位置，跳过
-    }
-
-    // 先写默认值，再尝试从 URDF 覆盖
-    q_min_(joint_index) = kDefaultLowerLimit;
-    q_max_(joint_index) = kDefaultUpperLimit;
-    q_vel_(joint_index) = kDefaultVelocityLimit;
-    q_effort_(joint_index) = kDefaultEffortLimit;
-
-    const auto urdf_joint = model->getJoint(kdl_joint.getName());
-    if (urdf_joint != nullptr && urdf_joint->limits != nullptr) {
-      q_min_(joint_index) = urdf_joint->limits->lower;
-      q_max_(joint_index) = urdf_joint->limits->upper;
-      q_vel_(joint_index) = urdf_joint->limits->velocity;
-      q_effort_(joint_index) = urdf_joint->limits->effort;
-    }
-
-    const auto hardware_limit = hardware_limits.find(kdl_joint.getName());
-    if (hardware_limit != hardware_limits.end()) {
-      const auto& limit = hardware_limit->second;
-      if (limit.has_lower) q_min_(joint_index) = limit.lower;
-      if (limit.has_upper) q_max_(joint_index) = limit.upper;
-      if (limit.has_velocity) q_vel_(joint_index) = limit.velocity;
-      if (limit.has_effort) q_effort_(joint_index) = limit.effort;
-    }
-
-    ++joint_index;
-  }
-
-  // 刷新可动关节名称列表，顺序与 KDL JntArray 一致
-  joint_names_.clear();
-  for (unsigned int i = 0; i < chain_.getNrOfSegments(); ++i) {
-    const auto& kdl_joint = chain_.getSegment(i).getJoint();
-    if (kdl_joint.getType() != KDL::Joint::None) {
-      joint_names_.push_back(kdl_joint.getName());
-    }
-  }
-
-  if (joint_names_.size() != chain_.getNrOfJoints()) {
-    log_ptr_->error("joint_names_ count ({}) != chain joints ({})",
-                    joint_names_.size(), chain_.getNrOfJoints());
-    return false;
-  }
-
-  return true;
 }
-
-int Model::GetJointNum() const {
-  return chain_.getNrOfJoints();
-}
-
-std::vector<std::string> Model::GetJointNames() const {
-  return joint_names_;
-}
-
+int Model::GetJointNum() const { return static_cast<int>(joint_names_.size()); }
+std::vector<std::string> Model::GetJointNames() const { return joint_names_; }
 }  // namespace rocos

@@ -51,7 +51,7 @@ const std::string kCsvDir = "/tmp/move_circle_three_point_csv/";
 // ─── 辅助 ───
 
 rocos::Frame makePose(double x, double y, double z) {
-    return rocos::Frame(KDL::Rotation::Identity(), KDL::Vector(x, y, z));
+    return rocos::Frame(rocos::Rotation::Identity(), rocos::Vector(x, y, z));
 }
 
 DataPoint extractData(int step, double time, const rocos::Reference& ref) {

@@ -52,7 +52,7 @@ const std::string kCsvDir = "/tmp/move_line_csv/";
 
 /// 构造位姿：位置 (x,y,z) + 绕 Z 轴旋转 angle 弧度
 rocos::Frame makeFrame(double x, double y, double z, double angle_z) {
-    return rocos::Frame(KDL::Rotation::RotZ(angle_z), KDL::Vector(x, y, z));
+    return rocos::Frame(rocos::Rotation::RotZ(angle_z), rocos::Vector(x, y, z));
 }
 
 /// 从已有 Reference 提取位姿数据

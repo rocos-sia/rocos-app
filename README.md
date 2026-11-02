@@ -32,16 +32,18 @@ ROCOS-App is the application of robotics, which is designed as the robot control
 
 ## Dependencies
 
-- orocos-kdl
+- Pinocchio 3.9.0（Git submodule）
 - ruckig
 - nlopt
-- trac_ik
+- pin_ik（Git submodule，仅用于 IK）
 - Eigen3
 - protobuf
 - grpc
 - tinyFSM
 
 
+
+Pinocchio 安装、自有类型边界及分阶段测试结果见 [后端迁移实现与验证](docs/pinocchio_backend_migration.md)。首次配置前初始化子模块，再执行 `bash cmake/build_pinocchio.sh build`，并向 CMake 传入 `-DCMAKE_PREFIX_PATH="$PWD/build/deps/prefix"`。
 
 ## Usage
 
@@ -59,9 +61,10 @@ ROCOS-App is the application of robotics, which is designed as the robot control
 在仓库根目录执行，以下以 `debug` 为例，替换预设名即可切换：
 
 ```bash
-git submodule update --init 3rdparty/rocos-shm
+git submodule update --init 3rdparty/rocos-shm 3rdparty/pinocchio 3rdparty/pin_ik
+bash cmake/build_pinocchio.sh build
 cmake --list-presets
-cmake --preset debug
+cmake --preset debug -DCMAKE_PREFIX_PATH="$PWD/build/deps/prefix"
 cmake --build --preset debug --parallel 2
 ctest --preset debug
 

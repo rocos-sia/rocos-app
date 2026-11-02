@@ -56,14 +56,14 @@ const std::string kTipLink  = "link_7";
 // ─── 辅助 ───
 
 /// 点到直线 (p_start → p_goal) 的垂直距离 [m]
-double pointToLineDistance(const KDL::Vector& p,
-                           const KDL::Vector& p_start,
-                           const KDL::Vector& p_goal) {
-    KDL::Vector dir = p_goal - p_start;
-    double len2 = KDL::dot(dir, dir);
+double pointToLineDistance(const rocos::Vector& p,
+                           const rocos::Vector& p_start,
+                           const rocos::Vector& p_goal) {
+    rocos::Vector dir = p_goal - p_start;
+    double len2 = rocos::dot(dir, dir);
     if (len2 < 1e-12) return (p - p_start).Norm();  // 退化：起点=终点
-    double t = KDL::dot(p - p_start, dir) / len2;
-    KDL::Vector proj = p_start + dir * t;
+    double t = rocos::dot(p - p_start, dir) / len2;
+    rocos::Vector proj = p_start + dir * t;
     return (p - proj).Norm();
 }
 
@@ -72,10 +72,10 @@ CartesianPoint extractCartesian(int step,
                                 double time,
                                 const rocos::JntArray& q,
                                 rocos::Model& model,
-                                const KDL::Vector& p_start,
-                                const KDL::Vector& p_goal) {
+                                const rocos::Vector& p_start,
+                                const rocos::Vector& p_goal) {
 
-    KDL::Frame fk;
+    rocos::Frame fk;
     model.ForwardKinematics(q, fk);
 
     CartesianPoint cp{};
@@ -106,8 +106,8 @@ void writeCsv(const std::string& filename,
 
 void runNormal(rocos::MoveLineOffline& move,
                rocos::Model& model,
-               const KDL::Vector& p_start,
-               const KDL::Vector& p_goal,
+               const rocos::Vector& p_start,
+               const rocos::Vector& p_goal,
                std::vector<CartesianPoint>& data,
                const std::string& csv_name) {
     data.clear();
@@ -130,8 +130,8 @@ void runNormal(rocos::MoveLineOffline& move,
 /// 运行暂停→继续模式并收集数据
 void runPauseResume(rocos::MoveLineOffline& move,
                     rocos::Model& model,
-                    const KDL::Vector& p_start,
-                    const KDL::Vector& p_goal,
+                    const rocos::Vector& p_start,
+                    const rocos::Vector& p_goal,
                     std::vector<CartesianPoint>& data,
                     const std::string& csv_name) {
     data.clear();
@@ -181,8 +181,8 @@ void runPauseResume(rocos::MoveLineOffline& move,
 /// 运行暂停→停止模式并收集数据
 void runPauseStop(rocos::MoveLineOffline& move,
                   rocos::Model& model,
-                  const KDL::Vector& p_start,
-                  const KDL::Vector& p_goal,
+                  const rocos::Vector& p_start,
+                  const rocos::Vector& p_goal,
                   std::vector<CartesianPoint>& data,
                   const std::string& csv_name) {
     data.clear();
@@ -236,10 +236,10 @@ void runPauseStop(rocos::MoveLineOffline& move,
 
 struct TestFixture {
     rocos::Model model{kUrdfPath, kBaseLink, kTipLink};
-    KDL::JntArray q_start{7};  // 初始关节角 [0, 60°, 0, 90°, 0, -60°, 0]
+    rocos::JntArray q_start{7};  // 初始关节角 [0, 60°, 0, 90°, 0, -60°, 0]
 
-    KDL::Frame frame_start;
-    KDL::Frame frame_goal;
+    rocos::Frame frame_start;
+    rocos::Frame frame_goal;
 
     TestFixture() {
         // 从非零关节构型出发，保证 IK 远离奇异区
@@ -256,8 +256,8 @@ struct TestFixture {
 
         // 目标帧：小偏移平移 + 小角度旋转（确保在 talon 工作空间内）
         frame_goal = frame_start;
-        frame_goal.p += KDL::Vector(0.10, 0.05, 0.05);
-        frame_goal.M = frame_start.M * KDL::Rotation::RotZ(M_PI / 6.0);
+        frame_goal.p += rocos::Vector(0.10, 0.05, 0.05);
+        frame_goal.M = frame_start.M * rocos::Rotation::RotZ(M_PI / 6.0);
     }
 
     rocos::MoveLineOffline createMove() {
@@ -348,7 +348,7 @@ TEST_CASE_FIXTURE(TestFixture, "MoveLineOffline 暂停停止 — 停止后未到
 
     // 验证未到终点
     const auto& last = data.back();
-    KDL::Vector final_pos(last.px, last.py, last.pz);
+    rocos::Vector final_pos(last.px, last.py, last.pz);
     double dist_start = (final_pos - frame_start.p).Norm();
     double dist_goal  = (final_pos - frame_goal.p).Norm();
     CHECK(dist_goal > 0.01);  // 离终点至少 1cm

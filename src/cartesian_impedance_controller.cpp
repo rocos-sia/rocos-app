@@ -160,7 +160,7 @@ Result CartesianImpedanceController::GenerateCmd(const Reference& ref_in,
 // UpdateCmd — 笛卡尔空间阻抗控制 + 力矩安全保护
 //
 //   核心公式：
-//     Δx_base = diff(x_cur, x_des)          ← 6D 位姿误差（基坐标系，KDL::diff 定义）
+//     Δx_base = diff(x_cur, x_des)          ← 6D 位姿误差（基坐标系，rocos::diff 定义）
 //     Δx_tool = R_cur^T · Δx_base           ← 误差变换到工具系
 //     v_base   = J · q̇_act                   ← 末端速度（基坐标系）
 //     v_cur    = R_cur^T · v_base            ← 速度变换到工具系
@@ -214,11 +214,11 @@ Result CartesianImpedanceController::UpdateCmd(const JntArray& q_cmd) {
     }
 
     // 提取当前末端姿态矩阵，后续多处使用
-    const KDL::Rotation& R_cur = x_cur.M;
+    const rocos::Rotation& R_cur = x_cur.M;
 
     // ---- 3. 6D 位姿误差 Δx = diff(x_cur, x_des)（基坐标系下表达） ----
-    // 注意: KDL::diff(F_a_b1, F_a_b2) 返回的 twist 在基坐标系 a 下表达
-    Twist x_err_base = KDL::diff(x_cur, x_des_);
+    // 注意: rocos::diff(F_a_b1, F_a_b2) 返回的 twist 在基坐标系 a 下表达
+    Twist x_err_base = rocos::diff(x_cur, x_des_);
 
     // ---- 4. 末端速度 v_base = J · q̇（基坐标系） ----
     Twist v_base;

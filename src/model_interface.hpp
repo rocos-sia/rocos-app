@@ -26,6 +26,8 @@
 
 namespace rocos {
 
+// 按 base→tip 的子连杆顺序（包括固定连杆）；局部力矩关于各连杆原点。
+// 空数组表示无外力。
 typedef std::vector<Wrench> Wrenches;
 
 
@@ -39,13 +41,13 @@ class ModelInterface {
   virtual Result ForwardDynamics(const JntArray &q, const JntArray &q_dot, const JntArray &torques, const Wrenches& f_ext,JntArray &q_dotdot) = 0;
   virtual Result InverseDynamics(const JntArray &q, const JntArray &q_dot, const JntArray &q_dotdot, const Wrenches& f_ext,JntArray &torques) = 0;
 
-  /// @brief 计算当前关节角下的 Jacobian 矩阵 (6×n)
+  /// @brief tip 原点的几何 Jacobian (6×n)，base 系表达，线速度在前。
   virtual Result GetJacobian(const JntArray& q, Jacobian& J_out) = 0;
 
-  /// @brief 获取 URDF/KDL chain 中可动关节的数量
+  /// @brief 获取 URDF 运动链 中可动关节的数量
   virtual int GetJointNum() const = 0;
 
-  /// @brief 获取 URDF/KDL chain 中可动关节的名称列表，顺序与 KDL joint array 一致
+  /// @brief 获取 URDF 运动链 中可动关节的名称列表，顺序与 ROCOS 关节向量 一致
   virtual std::vector<std::string> GetJointNames() const = 0;
 
   virtual const JntArray& GetPosLowerLimit() const {

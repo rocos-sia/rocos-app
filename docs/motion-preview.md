@@ -8,6 +8,8 @@ Integration status (2026-11-03): published to Apifox project 8387612, module 791
 
 Each request uses a separate planner and a cloned model with independent solvers. One preview per Robot may run at a time. The existing control loop is not locked while planning. Motion preview and PositionController share finite-value, dimension, joint-position and command-step velocity checks. All control-cycle points are checked before display downsampling. IK/FK failures, unfinished endpoints, oversized trajectories and computation-budget failures return an error without a partial result.
 
+The Pinocchio backend clone copies model configuration under the source model's computation/IK locks, then creates its own Data, pin_ik solver, mutexes and work buffers after releasing those locks. Planning uses only the clone. Joint limits and gravity are preserved; modifying the clone does not modify the live model. Model reload retains the backend's initialization/stopped-only restriction.
+
 Planning allows up to 5 seconds of computation, 120 seconds of trajectory and 120000 steps. The response retains the start and endpoint and at most max_points samples (default 300, range 2–2000). A stationary motion returns one point and duration zero. Display samples are not an executable control-cycle trajectory. Collision, force-control, hardware readiness and other live execution checks are not included.
 
 No plan ID is retained. Real execution still uses the existing motion endpoints and starts from actual feedback at execution time. A successful preview does not bypass any live controller checks or guarantee that re-planning reproduces the same path.

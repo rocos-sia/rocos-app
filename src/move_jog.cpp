@@ -268,7 +268,7 @@ JntArray MoveJog::computeJointVelocity() {
     } else {
         // 笛卡尔空间：Jacobian 伪逆
         const auto& tw = std::get<Twist>(direction_);
-        KDL::Twist cart_vel(tw.vel * s, tw.rot * s);
+        rocos::Twist cart_vel(tw.vel * s, tw.rot * s);
 
         if (model_) {
             model_->GetJacobian(q_integral_, jacobian_);
