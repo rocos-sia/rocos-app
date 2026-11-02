@@ -43,35 +43,35 @@ std::string maliciousZip(const char* name, bool symlink=false, int repetitions=1
 
 TEST_CASE_FIXTURE(Fixture,"Package transforms compose once, overrides restart and original exports stay original") {
     rocos::FrameRegistry registry((root/"frames.yaml").string(),library.string(),"robot_A");
-    REQUIRE(registry.set("plain",KDL::Frame(KDL::Vector(0,0,0.2)),true,false,true)==Result::NoError);
+    REQUIRE(registry.set("plain",rocos::Frame(rocos::Vector(0,0,0.2)),true,false,true)==Result::NoError);
     REQUIRE_NOTHROW(registry.importPackage(zip()));
     CHECK(registry.snapshot()->active_tool.empty());
     auto tool=registry.snapshot()->packages.at("gripper");
-    const KDL::Frame mount(KDL::Rotation::RotZ(M_PI/2),KDL::Vector(0,0,0.05));
+    const rocos::Frame mount(rocos::Rotation::RotZ(M_PI/2),rocos::Vector(0,0,0.05));
     REQUIRE_NOTHROW(registry.updatePackage(tool.name,mount,tool.tcp,tool.digest,tool.revision));
     REQUIRE(registry.activate(tool.name,true,true)==Result::NoError);
-    const KDL::Frame flange(KDL::Rotation::RotX(0.4),KDL::Vector(1,2,3)); KDL::Frame tcp;
+    const rocos::Frame flange(rocos::Rotation::RotX(0.4),rocos::Vector(1,2,3)); rocos::Frame tcp;
     REQUIRE(rocos::FrameRegistry::resolveTcp(*registry.snapshot(),flange,tcp)==Result::NoError);
-    CHECK(KDL::Equal(tcp,flange*mount*tool.tcp,1e-12));
-    CHECK_FALSE(KDL::Equal(tcp,flange*tool.tcp*mount,1e-6));
-    CHECK(registry.set(tool.name,KDL::Frame(),true,false,true)==Result::CallingConflictError);
+    CHECK(rocos::Equal(tcp,flange*mount*tool.tcp,1e-12));
+    CHECK_FALSE(rocos::Equal(tcp,flange*tool.tcp*mount,1e-6));
+    CHECK(registry.set(tool.name,rocos::Frame(),true,false,true)==Result::CallingConflictError);
     rocos::FrameRegistry restarted((root/"frames.yaml").string(),library.string(),"robot_A");
     REQUIRE(restarted.load()==Result::NoError);
     rocos::FrameRegistry wrong_robot((root/"frames.yaml").string(),library.string(),"robot_B");
     CHECK(wrong_robot.load()==Result::IllegalParameter); CHECK(wrong_robot.snapshot()->packages.empty());
     CHECK(restarted.snapshot()->active_tool=="gripper"); CHECK(restarted.snapshot()->tools.count("plain")==1);
-    CHECK(KDL::Equal(restarted.snapshot()->tools.at("gripper"),mount*tool.tcp,1e-12));
+    CHECK(rocos::Equal(restarted.snapshot()->tools.at("gripper"),mount*tool.tcp,1e-12));
     tool=restarted.snapshot()->packages.at("gripper");
     const auto original=ToolPackageFiles::installZip(ToolPackageFiles::exportZip(tool,"",false),(root/"copy").string());
-    CHECK(KDL::Equal(original.mount,KDL::Frame(),1e-12)); CHECK(original.digest==tool.digest);
-    const KDL::Frame flange_tcp(KDL::Rotation::RotY(0.3),KDL::Vector(0.2,0.3,0.4));
+    CHECK(rocos::Equal(original.mount,rocos::Frame(),1e-12)); CHECK(original.digest==tool.digest);
+    const rocos::Frame flange_tcp(rocos::Rotation::RotY(0.3),rocos::Vector(0.2,0.3,0.4));
     YAML::Node calibration; calibration["rms_error"]=0.0001;
     REQUIRE_NOTHROW(restarted.updatePackage(tool.name,mount,mount.Inverse()*flange_tcp,tool.digest,tool.revision,calibration));
     tool=restarted.snapshot()->packages.at("gripper");
-    CHECK(KDL::Equal(restarted.snapshot()->tools.at("gripper"),flange_tcp,1e-12));
+    CHECK(rocos::Equal(restarted.snapshot()->tools.at("gripper"),flange_tcp,1e-12));
     const auto exported=ToolPackageFiles::installZip(ToolPackageFiles::exportZip(tool,"1.0.1",true),(root/"new").string());
-    CHECK(exported.version=="1.0.1"); CHECK(KDL::Equal(exported.mount,KDL::Frame(),1e-12));
-    CHECK(KDL::Equal(exported.tcp,mount.Inverse()*flange_tcp,1e-12));
+    CHECK(exported.version=="1.0.1"); CHECK(rocos::Equal(exported.mount,rocos::Frame(),1e-12));
+    CHECK(rocos::Equal(exported.tcp,mount.Inverse()*flange_tcp,1e-12));
     auto installation=restarted.exportInstallation(tool.name);
     REQUIRE_NOTHROW(restarted.importInstallation(installation));
     rocos::FrameRegistry other((root/"other.yaml").string(),library.string(),"robot_B");
@@ -86,7 +86,7 @@ TEST_CASE_FIXTURE(Fixture,"Package transforms compose once, overrides restart an
 
 TEST_CASE_FIXTURE(Fixture,"Invalid imports and failed persistence leave the registry and plain tools unchanged") {
     rocos::FrameRegistry registry((root/"frames.yaml").string(),library.string());
-    registry.set("plain",KDL::Frame(),true); const auto before=registry.snapshot();
+    registry.set("plain",rocos::Frame(),true); const auto before=registry.snapshot();
     for (const auto& bytes : {std::string("not zip"),maliciousZip("../escape"),maliciousZip("gripper/../../escape"),maliciousZip("gripper/link",true)}) {
         CHECK_THROWS(registry.importPackage(bytes)); CHECK(registry.snapshot()==before);
     }
@@ -94,7 +94,7 @@ TEST_CASE_FIXTURE(Fixture,"Invalid imports and failed persistence leave the regi
     std::ofstream(source/"meshes/base.stl")<<"solid base\nendsolid base\n";
     rocos::FrameRegistry failed((root/"missing/frames.yaml").string(),library.string());
     CHECK_THROWS(failed.importPackage(zip())); CHECK(failed.snapshot()->tools.empty());
-    registry.set("gripper",KDL::Frame(),true); CHECK_THROWS(registry.importPackage(zip())); CHECK(registry.snapshot()->packages.empty());
+    registry.set("gripper",rocos::Frame(),true); CHECK_THROWS(registry.importPackage(zip())); CHECK(registry.snapshot()->packages.empty());
 }
 
 TEST_CASE_FIXTURE(Fixture,"Directory scans freeze source assets and repeated imports preserve local calibration") {
@@ -107,9 +107,9 @@ TEST_CASE_FIXTURE(Fixture,"Directory scans freeze source assets and repeated imp
     CHECK(ToolPackageFiles::asset(tool,"meshes/base.stl")==content);
     CHECK_THROWS(registry.reloadPackages());
     REQUIRE_NOTHROW(registry.reloadPackages(false));
-    const auto mount=KDL::Frame(KDL::Vector(0,0,0.03)); YAML::Node metadata; metadata["test"]=1;
+    const auto mount=rocos::Frame(rocos::Vector(0,0,0.03)); YAML::Node metadata; metadata["test"]=1;
     registry.updatePackage(tool.name,mount,tool.tcp,tool.digest,tool.revision,metadata);
-    registry.importPackage(zip()); CHECK(KDL::Equal(registry.snapshot()->packages.at(tool.name).mount,mount,1e-12));
+    registry.importPackage(zip()); CHECK(rocos::Equal(registry.snapshot()->packages.at(tool.name).mount,mount,1e-12));
     CHECK(YAML::Load(registry.snapshot()->packages.at(tool.name).calibration_yaml)["test"].as<int>()==1);
     CHECK_THROWS(ToolPackageFiles::asset(tool,"../../frames.yaml"));
     fs::create_symlink(root/"frames.yaml",fs::path(tool.directory)/"bad.stl");
@@ -119,7 +119,7 @@ TEST_CASE_FIXTURE(Fixture,"Directory scans freeze source assets and repeated imp
 TEST_CASE_FIXTURE(Fixture,"ZIP updates require the old digest and preserve active selection while clearing old overrides") {
     rocos::FrameRegistry registry((root/"frames.yaml").string(),library.string());
     registry.importPackage(zip()); auto tool=registry.snapshot()->packages.at("gripper");
-    registry.updatePackage(tool.name,KDL::Frame(KDL::Vector(0,0,0.04)),tool.tcp,tool.digest,tool.revision);
+    registry.updatePackage(tool.name,rocos::Frame(rocos::Vector(0,0,0.04)),tool.tcp,tool.digest,tool.revision);
     registry.activate(tool.name,true,true);
     std::ofstream(source/"tool.yaml") << "schema_version: 1\nname: gripper\npackage_version: 1.0.1\nmodel: {urdf: tool.urdf}\ntcp: {position: [0,0,0.3], orientation: [0,0,0,1]}\n";
     const auto before=registry.snapshot();
@@ -127,7 +127,7 @@ TEST_CASE_FIXTURE(Fixture,"ZIP updates require the old digest and preserve activ
     REQUIRE_NOTHROW(registry.importPackage(zip(),tool.digest));
     const auto updated=registry.snapshot()->packages.at(tool.name);
     CHECK(updated.version=="1.0.1"); CHECK(updated.revision==3);
-    CHECK(KDL::Equal(updated.mount,KDL::Frame(),1e-12)); CHECK(updated.tcp.p.z()==doctest::Approx(0.3));
+    CHECK(rocos::Equal(updated.mount,rocos::Frame(),1e-12)); CHECK(updated.tcp.p.z()==doctest::Approx(0.3));
     CHECK(registry.snapshot()->active_tool==tool.name);
 }
 

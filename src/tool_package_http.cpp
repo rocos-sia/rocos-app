@@ -6,7 +6,7 @@
 
 namespace rocos {
 namespace {
-KDL::Frame jsonPose(const nlohmann::json& value) {
+rocos::Frame jsonPose(const nlohmann::json& value) {
     YAML::Node node;
     for (const auto* key : {"x","y","z"}) node["position"].push_back(value.at("position").at(key).get<double>());
     for (const auto* key : {"x","y","z","w"}) node["orientation"].push_back(value.at("orientation").at(key).get<double>());

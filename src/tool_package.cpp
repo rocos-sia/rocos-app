@@ -85,17 +85,17 @@ struct TempDirectory {
     ~TempDirectory() { std::error_code error; fs::remove_all(path, error); }
 };
 }
-KDL::Frame ToolPackageFiles::pose(const YAML::Node& node) {
+rocos::Frame ToolPackageFiles::pose(const YAML::Node& node) {
     require(node.IsMap(), "Expected pose mapping");
     const auto p = node["position"], q = node["orientation"];
     require(p.IsSequence() && p.size() == 3 && q.IsSequence() && q.size() == 4, "Expected position[3], orientation[4]");
     const double x=q[0].as<double>(), y=q[1].as<double>(), z=q[2].as<double>(), w=q[3].as<double>();
     const double norm = std::sqrt(x*x+y*y+z*z+w*w);
     require(std::isfinite(norm) && norm > 1e-12, "Invalid tool quaternion");
-    KDL::Frame frame(KDL::Rotation::Quaternion(x/norm,y/norm,z/norm,w/norm), KDL::Vector(p[0].as<double>(),p[1].as<double>(),p[2].as<double>()));
+    rocos::Frame frame(rocos::Rotation::Quaternion(x/norm,y/norm,z/norm,w/norm), rocos::Vector(p[0].as<double>(),p[1].as<double>(),p[2].as<double>()));
     require(FrameRegistry::validFrame(frame), "Invalid tool transform"); return frame;
 }
-YAML::Node ToolPackageFiles::pose(const KDL::Frame& frame) {
+YAML::Node ToolPackageFiles::pose(const rocos::Frame& frame) {
     YAML::Node node;
     for (int i=0;i<3;++i) node["position"].push_back(frame.p[i]);
     double x,y,z,w; frame.M.GetQuaternion(x,y,z,w);
@@ -118,7 +118,7 @@ ToolPackage ToolPackageFiles::read(const std::string& directory) {
     tool.name = root["name"].as<std::string>(""); tool.version = root["package_version"].as<std::string>("");
     require(packageName(tool.name) && version(tool.version), "Invalid tool name or package version");
     tool.directory = fs::absolute(directory).lexically_normal().string(); tool.digest = digest(entries);
-    tool.default_mount = root["mount"] ? pose(root["mount"]) : KDL::Frame();
+    tool.default_mount = root["mount"] ? pose(root["mount"]) : rocos::Frame();
     tool.default_tcp = pose(root["tcp"]); tool.mount = tool.default_mount; tool.tcp = tool.default_tcp;
     require(FrameRegistry::validFrame(tool.mount*tool.tcp), "Composed tool transform is invalid");
     if (root["model"]) {

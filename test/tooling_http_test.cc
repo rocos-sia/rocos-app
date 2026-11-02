@@ -71,7 +71,7 @@ struct Fixture {
         const auto response = client->Get(path);
         REQUIRE(response); CHECK(response->status == 200); return Json::parse(response->body);
     }
-    Json capture(int index, const KDL::Frame& frame, const std::string& session = "") {
+    Json capture(int index, const rocos::Frame& frame, const std::string& session = "") {
         {
             std::lock_guard<std::mutex> lock(capture_mutex);
             next = {frame, {0.1, -0.2, 0.3}, 1792740000.0 + index};
@@ -102,7 +102,7 @@ Json pose(double z = 0.15) {
 TEST_CASE_FIXTURE(Fixture, "TCP queries are read only and state preserves the flange and fixed tool offset") {
     {
         std::lock_guard<std::mutex> lock(capture_mutex);
-        next.flange = KDL::Frame(KDL::Rotation::RotZ(1.5707963267948966), KDL::Vector(1, 2, 3));
+        next.flange = rocos::Frame(rocos::Rotation::RotZ(1.5707963267948966), rocos::Vector(1, 2, 3));
     }
     auto tcp = get("/api/robot/tcp");
     REQUIRE(tcp["success"] == true);
@@ -123,7 +123,7 @@ TEST_CASE_FIXTURE(Fixture, "TCP queries are read only and state preserves the fl
     CHECK(get("/api/robot/tcp?name=bad%2Fname")["code"] == 1001);
     {
         std::lock_guard<std::mutex> lock(capture_mutex);
-        next.flange.M.data[0] = 2;
+        next.flange.M(0, 0) = 2;
     }
     CHECK(get("/api/robot/tcp")["code"] == static_cast<int>(rocos::Result::FkCalcFail));
     CHECK(get("/api/robot/state")["data"]["tcp"].is_null());
@@ -157,15 +157,15 @@ TEST_CASE_FIXTURE(Fixture, "Tool APIs enforce credentials and persist current to
 }
 
 TEST_CASE_FIXTURE(Fixture, "Six point HTTP capture calculate query and recapture keep result separate from tools") {
-    const KDL::Vector tcp(0.01, -0.02, 0.18), pivot(0.5, 0.1, 0.4);
-    std::array<KDL::Frame, 6> samples;
-    samples[0].M = KDL::Rotation::RPY(0.5, 0.1, 0.3);
-    samples[1].M = KDL::Rotation::RPY(-0.3, 0.6, 0.2);
-    samples[2].M = KDL::Rotation::RPY(0.2, -0.4, -0.5);
-    samples[3].M = KDL::Rotation::RPY(0, 0, 0);
+    const rocos::Vector tcp(0.01, -0.02, 0.18), pivot(0.5, 0.1, 0.4);
+    std::array<rocos::Frame, 6> samples;
+    samples[0].M = rocos::Rotation::RPY(0.5, 0.1, 0.3);
+    samples[1].M = rocos::Rotation::RPY(-0.3, 0.6, 0.2);
+    samples[2].M = rocos::Rotation::RPY(0.2, -0.4, -0.5);
+    samples[3].M = rocos::Rotation::RPY(0, 0, 0);
     for (int i = 0; i < 4; ++i) samples[i].p = pivot - samples[i].M * tcp;
-    samples[4] = samples[3]; samples[4].p = samples[4].p + KDL::Vector(0.1, 0, 0);
-    samples[5] = samples[3]; samples[5].p = samples[5].p + KDL::Vector(0, 0, 0.1);
+    samples[4] = samples[3]; samples[4].p = samples[4].p + rocos::Vector(0.1, 0, 0);
+    samples[5] = samples[3]; samples[5].p = samples[5].p + rocos::Vector(0, 0, 0.1);
     CHECK(capture(2, samples[1])["code"] == 4001);
     auto first = capture(1, samples[0]);
     REQUIRE(first["success"] == true);
@@ -194,10 +194,10 @@ TEST_CASE_FIXTURE(Fixture, "Six point HTTP capture calculate query and recapture
 }
 
 TEST_CASE_FIXTURE(Fixture, "Six point API rejects degenerate captures without publishing a tool") {
-    auto first = capture(1, KDL::Frame());
+    auto first = capture(1, rocos::Frame());
     REQUIRE(first["success"] == true);
     const auto id = first["data"]["session_id"].get<std::string>();
-    for (int i = 2; i <= 6; ++i) REQUIRE(capture(i, KDL::Frame(), id)["success"] == true);
+    for (int i = 2; i <= 6; ++i) REQUIRE(capture(i, rocos::Frame(), id)["success"] == true);
     CHECK(post("/api/calibration/run", {{"session_id", id}})["code"] == 4002);
     CHECK(get("/api/calibration/result?session_id=" + id)["data"]["result"].is_null());
     CHECK(get("/api/robot/tool_frames")["data"]["names"].empty());
@@ -239,23 +239,23 @@ TEST_CASE_FIXTURE(Fixture,"Package HTTP APIs preserve authentication, ordinary f
     auto exported=client->Get("/api/robot/tool_package/export?name=TCP_calibrated"); REQUIRE(exported);
     CHECK(exported->get_header_value("Content-Type")=="application/zip");
     const auto original=rocos::ToolPackageFiles::installZip(exported->body,(directory/"exported").string());
-    CHECK(KDL::Equal(original.mount,KDL::Frame(),1e-12)); CHECK(original.digest==package["digest"].get<std::string>());
+    CHECK(rocos::Equal(original.mount,rocos::Frame(),1e-12)); CHECK(original.digest==package["digest"].get<std::string>());
     CHECK(get("/api/robot/tool_frame?name=plain")["data"]["frame"]==pose());
 }
 
 TEST_CASE_FIXTURE(Fixture,"Package calibration is frozen to installation and saves local TCP with recorded errors") {
     REQUIRE(importZip()["success"]==true);
     auto package=get("/api/robot/tool_frame?name=TCP_calibrated")["data"]["package"];
-    const KDL::Frame mount(KDL::Rotation::RotZ(M_PI/2),KDL::Vector(0,0,0.04));
+    const rocos::Frame mount(rocos::Rotation::RotZ(M_PI/2),rocos::Vector(0,0,0.04));
     auto tool=registry->snapshot()->packages.at("TCP_calibrated");
     registry->updatePackage(tool.name,mount,tool.tcp,tool.digest,tool.revision);
-    const KDL::Vector tcp(0.02,-0.03,0.18),pivot(0.5,0.1,0.4);
-    std::array<KDL::Frame,6> samples;
-    samples[0].M=KDL::Rotation::RPY(0.5,0.1,0.3); samples[1].M=KDL::Rotation::RPY(-0.3,0.6,0.2);
-    samples[2].M=KDL::Rotation::RPY(0.2,-0.4,-0.5); samples[3].M=KDL::Rotation::Identity();
+    const rocos::Vector tcp(0.02,-0.03,0.18),pivot(0.5,0.1,0.4);
+    std::array<rocos::Frame,6> samples;
+    samples[0].M=rocos::Rotation::RPY(0.5,0.1,0.3); samples[1].M=rocos::Rotation::RPY(-0.3,0.6,0.2);
+    samples[2].M=rocos::Rotation::RPY(0.2,-0.4,-0.5); samples[3].M=rocos::Rotation::Identity();
     for (int i=0;i<4;++i) samples[i].p=pivot-samples[i].M*tcp;
-    samples[4]=samples[3]; samples[4].p+=KDL::Vector(0.1,0,0);
-    samples[5]=samples[3]; samples[5].p+=KDL::Vector(0,0,0.1);
+    samples[4]=samples[3]; samples[4].p+=rocos::Vector(0.1,0,0);
+    samples[5]=samples[3]; samples[5].p+=rocos::Vector(0,0,0.1);
     auto id=capture(1,samples[0])["data"]["session_id"].get<std::string>();
     tool=registry->snapshot()->packages.at("TCP_calibrated");
     registry->updatePackage(tool.name,mount,tool.tcp,tool.digest,tool.revision);
@@ -267,32 +267,32 @@ TEST_CASE_FIXTURE(Fixture,"Package calibration is frozen to installation and sav
     CHECK(post("/api/calibration/save",{{"session_id",id}},false)["code"]==3006);
     busy=true; CHECK(post("/api/calibration/save",{{"session_id",id}})["code"]==4005); busy=false;
     REQUIRE(post("/api/calibration/save",{{"session_id",id}})["success"]==true);
-    const KDL::Frame flange_tcp(KDL::Rotation::Identity(),tcp);
+    const rocos::Frame flange_tcp(rocos::Rotation::Identity(),tcp);
     tool=registry->snapshot()->packages.at("TCP_calibrated");
-    CHECK(KDL::Equal(tool.tcp,mount.Inverse()*flange_tcp,1e-9));
-    CHECK(KDL::Equal(registry->snapshot()->tools.at(tool.name),flange_tcp,1e-9));
+    CHECK(rocos::Equal(tool.tcp,mount.Inverse()*flange_tcp,1e-9));
+    CHECK(rocos::Equal(registry->snapshot()->tools.at(tool.name),flange_tcp,1e-9));
     CHECK(YAML::Load(tool.calibration_yaml)["max_error"].as<double>()<1e-9);
     CHECK(YAML::Load(tool.calibration_yaml)["package_digest"].as<std::string>()==tool.digest);
     CHECK(registry->snapshot()->active_tool.empty());
     rocos::FrameRegistry restarted(registry->path()); REQUIRE(restarted.load()==rocos::Result::NoError);
-    CHECK(KDL::Equal(restarted.snapshot()->tools.at(tool.name),flange_tcp,1e-9));
+    CHECK(rocos::Equal(restarted.snapshot()->tools.at(tool.name),flange_tcp,1e-9));
     CHECK_THROWS(rocos::ToolPackageFiles::exportZip(tool,"1.0.0",true));
 }
 
 TEST_CASE_FIXTURE(Fixture,"Deleting reimporting or restoring a package cannot revive an old calibration session") {
     REQUIRE(importZip()["success"]==true);
     const auto before=registry->snapshot()->packages.at("TCP_calibrated").revision;
-    auto first=capture(1,KDL::Frame()); REQUIRE(first["success"]==true);
+    auto first=capture(1,rocos::Frame()); REQUIRE(first["success"]==true);
     const auto id=first["data"]["session_id"].get<std::string>();
     REQUIRE(registry->remove("TCP_calibrated",true,true)==rocos::Result::NoError);
     REQUIRE(importZip()["success"]==true);
     CHECK(registry->snapshot()->packages.at("TCP_calibrated").revision>before);
-    CHECK(capture(2,KDL::Frame(),id)["code"]==4004);
+    CHECK(capture(2,rocos::Frame(),id)["code"]==4004);
     CHECK(post("/api/calibration/save",{{"session_id",id}})["code"]==4004);
-    first=capture(1,KDL::Frame()); const auto restored_id=first["data"]["session_id"].get<std::string>();
+    first=capture(1,rocos::Frame()); const auto restored_id=first["data"]["session_id"].get<std::string>();
     const auto saved=(directory/"saved.yaml").string(); REQUIRE(registry->save(saved)==rocos::Result::NoError);
     auto tool=registry->snapshot()->packages.at("TCP_calibrated");
     registry->updatePackage(tool.name,tool.mount,tool.tcp,tool.digest,tool.revision);
     REQUIRE(registry->load(saved)==rocos::Result::NoError);
-    CHECK(capture(2,KDL::Frame(),restored_id)["code"]==4004);
+    CHECK(capture(2,rocos::Frame(),restored_id)["code"]==4004);
 }

@@ -147,7 +147,7 @@ Frame MoveLine::interpolatePose(double s) const {
 
     // 旋转：Eigen::Quaterniond::slerp（使用构造时缓存的四元数）
     Eigen::Quaterniond q_interp = q_start_.slerp(s, q_end_);
-    result.M = KDL::Rotation::Quaternion(
+    result.M = rocos::Rotation::Quaternion(
         q_interp.x(), q_interp.y(), q_interp.z(), q_interp.w());
 
     return result;

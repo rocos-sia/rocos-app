@@ -84,7 +84,7 @@ class MoveServo : public MotionInterface {
   ///        kJointPosition/kNone → 当前关节角；kCartesianPosition → FK 得到的位姿
   Result fillCurrentReference(Reference& ref_out);
 
-  // ─── 矩阵转换辅助：16 元素 row-major 4x4 <-> KDL::Frame ───
+  // ─── 矩阵转换辅助：16 元素 row-major 4x4 <-> rocos::Frame ───
   static Frame matrixToFrame(const std::array<double, 16>& mat);
   static void  frameToMatrix(const Frame& f, std::array<double, 16>& mat);
 

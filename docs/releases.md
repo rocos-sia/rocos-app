@@ -6,10 +6,11 @@
 
 ```bash
 git submodule update --init --recursive
-sudo apt-get install cmake g++ make dpkg-dev patchelf libboost-all-dev libyaml-cpp-dev libeigen3-dev liborocos-kdl-dev liburdfdom-dev libtinyxml-dev libtinyxml2-dev libarchive-dev libssl-dev
-cmake -S . -B build/deb-release -DCMAKE_BUILD_TYPE=Release
-cmake --build build/deb-release --parallel 2 --target rocosAppMain http_control_rights_test app_config_test tool_package_test tooling_http_test
-ctest --test-dir build/deb-release --output-on-failure -R '^(http_control_rights_test|app_config_test|tool_package_test|tooling_http_test)$'
+sudo apt-get install cmake g++ make dpkg-dev patchelf libboost-all-dev libyaml-cpp-dev libeigen3-dev liburdfdom-dev libtinyxml-dev libtinyxml2-dev libarchive-dev libssl-dev
+bash cmake/build_pinocchio.sh build/deb-release
+cmake -S . -B build/deb-release -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$PWD/build/deb-release/deps/prefix"
+cmake --build build/deb-release --parallel 2 --target rocosAppMain math_types_test model_test model_reference_test http_control_rights_test app_config_test tool_package_test tooling_http_test
+ctest --test-dir build/deb-release --output-on-failure -R '^(math_types_test|model_test|model_reference_test|http_control_rights_test|app_config_test|tool_package_test|tooling_http_test)$'
 python3 packaging/build_deb.py
 ```
 

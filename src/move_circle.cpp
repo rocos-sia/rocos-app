@@ -41,26 +41,26 @@ bool MoveCircle::buildArcFrame(const Frame& pose_start,
                                const Frame& center_frame,
                                Frame& arc_frame_out,
                                double& radius_out) {
-    const KDL::Vector center = center_frame.p;
+    const rocos::Vector center = center_frame.p;
 
-    KDL::Vector axis_x = pose_start.p - center;
+    rocos::Vector axis_x = pose_start.p - center;
     radius_out = axis_x.Normalize();
     if (radius_out < kArcEpsilon) return false;
 
-    KDL::Vector axis_z = center_frame.M.UnitZ();
-    const double proj = KDL::dot(axis_z, axis_x);
+    rocos::Vector axis_z = center_frame.M.UnitZ();
+    const double proj = rocos::dot(axis_z, axis_x);
     axis_z -= proj * axis_x;
     if (axis_z.Normalize() < kArcEpsilon) {
-        axis_z = KDL::Vector(0, 0, 1);
-        if (std::abs(KDL::dot(axis_z, axis_x)) > 0.999) axis_z = KDL::Vector(0, 1, 0);
-        axis_z -= KDL::dot(axis_z, axis_x) * axis_x;
+        axis_z = rocos::Vector(0, 0, 1);
+        if (std::abs(rocos::dot(axis_z, axis_x)) > 0.999) axis_z = rocos::Vector(0, 1, 0);
+        axis_z -= rocos::dot(axis_z, axis_x) * axis_x;
         axis_z.Normalize();
     }
 
-    KDL::Vector axis_y = axis_z * axis_x;
+    rocos::Vector axis_y = axis_z * axis_x;
     axis_y.Normalize();
 
-    arc_frame_out = KDL::Frame(KDL::Rotation(axis_x, axis_y, axis_z), center);
+    arc_frame_out = rocos::Frame(rocos::Rotation(axis_x, axis_y, axis_z), center);
     return true;
 }
 
@@ -127,46 +127,46 @@ bool MoveCircle::solveThreePoints(const Frame& start,
                                    double& radius_out,
                                    double& theta_out) {
     // ── Step 1: 解圆心 ──
-    KDL::Vector v1 = via.p - start.p;
-    KDL::Vector v2 = goal.p - start.p;
+    rocos::Vector v1 = via.p - start.p;
+    rocos::Vector v2 = goal.p - start.p;
     if (v1.Normalize() < kArcEpsilon) return false;
     if (v2.Normalize() < kArcEpsilon) return false;
 
     // Start → Via → Goal 右手螺旋
-    KDL::Vector axis_z = v1 * v2;
+    rocos::Vector axis_z = v1 * v2;
     if (axis_z.Normalize() < kArcEpsilon) return false;
 
-    KDL::Vector axis_x = v1;
-    KDL::Vector axis_y = axis_z * axis_x;
+    rocos::Vector axis_x = v1;
+    rocos::Vector axis_y = axis_z * axis_x;
     axis_y.Normalize();
 
-    const KDL::Vector d1 = via.p - start.p;
-    const KDL::Vector d2 = goal.p - start.p;
-    const double bx = KDL::dot(d1, axis_x);
-    const double cx = KDL::dot(d2, axis_x);
-    const double cy = KDL::dot(d2, axis_y);
+    const rocos::Vector d1 = via.p - start.p;
+    const rocos::Vector d2 = goal.p - start.p;
+    const double bx = rocos::dot(d1, axis_x);
+    const double cx = rocos::dot(d2, axis_x);
+    const double cy = rocos::dot(d2, axis_y);
     if (std::abs(cy) < kArcEpsilon) return false;
 
     const double h = ((cx - bx / 2.0) * (cx - bx / 2.0) + cy * cy -
                       (bx / 2.0) * (bx / 2.0)) / (2.0 * cy);
-    const KDL::Vector center = start.p + axis_x * (bx / 2.0) + axis_y * h;
+    const rocos::Vector center = start.p + axis_x * (bx / 2.0) + axis_y * h;
 
     // ── Step 2: 构建正交标架（X 指向起点）──
-    KDL::Vector arc_x = start.p - center;
+    rocos::Vector arc_x = start.p - center;
     radius_out = arc_x.Normalize();
     if (radius_out < kArcEpsilon) return false;
 
-    KDL::Vector arc_z = axis_z;
-    arc_z -= KDL::dot(arc_z, arc_x) * arc_x;
+    rocos::Vector arc_z = axis_z;
+    arc_z -= rocos::dot(arc_z, arc_x) * arc_x;
     if (arc_z.Normalize() < kArcEpsilon) return false;
 
-    KDL::Vector arc_y = arc_z * arc_x;
+    rocos::Vector arc_y = arc_z * arc_x;
     arc_y.Normalize();
 
-    arc_frame_out = KDL::Frame(KDL::Rotation(arc_x, arc_y, arc_z), center);
+    arc_frame_out = rocos::Frame(rocos::Rotation(arc_x, arc_y, arc_z), center);
 
     // ── Step 3: 转角 ──
-    const KDL::Vector end_local = arc_frame_out.Inverse() * goal.p;
+    const rocos::Vector end_local = arc_frame_out.Inverse() * goal.p;
     double theta = std::atan2(end_local(1), end_local(0));
     if (theta < 0.0) theta += 2.0 * M_PI;
     theta_out = theta;
@@ -239,10 +239,10 @@ bool MoveCircle::computeNormalizedLimits() {
 
 Frame MoveCircle::interpolateCircular(double s) const {
     const double angle = s * theta_;
-    const KDL::Vector arc_pos(radius_ * std::cos(angle),
+    const rocos::Vector arc_pos(radius_ * std::cos(angle),
                                radius_ * std::sin(angle),
                                0.0);
-    return KDL::Frame(pose_start_.M, arc_frame_ * arc_pos);
+    return rocos::Frame(pose_start_.M, arc_frame_ * arc_pos);
 }
 
 // ============================================================================

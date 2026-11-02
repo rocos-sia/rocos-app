@@ -38,7 +38,7 @@ class JointBinding {
   ~JointBinding() = default;
 
   /// @brief 配置绑定上下文：设置已知的 model joint 名称与 hardware drive id 列表
-  /// @param model_joint_names   URDF 中可动关节名称（顺序与 KDL JntArray 一致）
+  /// @param model_joint_names   URDF 中可动关节名称（顺序与 ROCOS JntArray 一致）
   /// @param hardware_drive_ids  硬件中所有伺服驱动器的 id 列表
   /// @return NoError / IllegalParameter
   Result Configure(const std::vector<std::string>& model_joint_names,

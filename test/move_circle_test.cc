@@ -52,12 +52,12 @@ const std::string kCsvDir = "/tmp/move_circle_csv/";
 
 /// 圆心在 origin，法向 Z 轴（XY 平面圆弧）
 rocos::Frame makeCenterFrame(double cx, double cy, double cz) {
-    return rocos::Frame(KDL::Rotation::Identity(), KDL::Vector(cx, cy, cz));
+    return rocos::Frame(rocos::Rotation::Identity(), rocos::Vector(cx, cy, cz));
 }
 
 /// 起始位姿：位置 (x,y,z)，单位姿态
 rocos::Frame makeStartPose(double x, double y, double z) {
-    return rocos::Frame(KDL::Rotation::Identity(), KDL::Vector(x, y, z));
+    return rocos::Frame(rocos::Rotation::Identity(), rocos::Vector(x, y, z));
 }
 
 DataPoint extractData(int step, double time, const rocos::Reference& ref) {

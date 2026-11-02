@@ -10,7 +10,6 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
-#include <kdl_parser/kdl_parser.hpp>
 #include <random>
 #include <sstream>
 #include <stdexcept>
@@ -103,7 +102,7 @@ bool parseJogFrame(const std::string& frame, Robot::JogFrame& jog_frame) {
 }
 
 
-bool parseFrameJson(const nlohmann::json& j, KDL::Frame& frame) {
+bool parseFrameJson(const nlohmann::json& j, rocos::Frame& frame) {
     if (!j.is_object()) return false;
 
     if (j.contains("position") && j.contains("orientation") &&
@@ -121,8 +120,8 @@ bool parseFrameJson(const nlohmann::json& j, KDL::Frame& frame) {
             !isFinite(qx) || !isFinite(qy) || !isFinite(qz) || !isFinite(qw)) {
             return false;
         }
-        frame = KDL::Frame(KDL::Rotation::Quaternion(qx, qy, qz, qw),
-                           KDL::Vector(x, y, z));
+        frame = rocos::Frame(rocos::Rotation::Quaternion(qx, qy, qz, qw),
+                           rocos::Vector(x, y, z));
         return true;
     }
 
@@ -137,14 +136,14 @@ bool parseFrameJson(const nlohmann::json& j, KDL::Frame& frame) {
         !isFinite(qx) || !isFinite(qy) || !isFinite(qz) || !isFinite(qw)) {
         return false;
     }
-    frame = KDL::Frame(KDL::Rotation::Quaternion(qx, qy, qz, qw),
-                       KDL::Vector(x, y, z));
+    frame = rocos::Frame(rocos::Rotation::Quaternion(qx, qy, qz, qw),
+                       rocos::Vector(x, y, z));
     return true;
 }
 
 bool parseNamedFrameBody(const nlohmann::json& body,
                          std::string& name,
-                         KDL::Frame& frame) {
+                         rocos::Frame& frame) {
     if (body.is_discarded() || !body.contains("name") || !body["name"].is_string()) {
         return false;
     }
@@ -753,7 +752,7 @@ void RobotHttpServer::handleControlHeartbeat(const httplib::Request& req, httpli
 // Utility: Frame <-> JSON Conversion
 // ============================================================================
 
-KDL::Frame RobotHttpServer::jsonToFrame(const nlohmann::json& j) {
+rocos::Frame RobotHttpServer::jsonToFrame(const nlohmann::json& j) {
     double px = j.value("x", 0.0);
     double py = j.value("y", 0.0);
     double pz = j.value("z", 0.0);
@@ -762,29 +761,29 @@ KDL::Frame RobotHttpServer::jsonToFrame(const nlohmann::json& j) {
     double qz = j.value("qz", 0.0);
     double qw = j.value("qw", 1.0);
 
-    return KDL::Frame(
-        KDL::Rotation::Quaternion(qx, qy, qz, qw),
-        KDL::Vector(px, py, pz));
+    return rocos::Frame(
+        rocos::Rotation::Quaternion(qx, qy, qz, qw),
+        rocos::Vector(px, py, pz));
 }
 
-KDL::Frame RobotHttpServer::jsonToFrame(const nlohmann::json& pos,
+rocos::Frame RobotHttpServer::jsonToFrame(const nlohmann::json& pos,
                                         const nlohmann::json& rot) {
-    KDL::Vector p(pos.value("x", 0.0),
+    rocos::Vector p(pos.value("x", 0.0),
                   pos.value("y", 0.0),
                   pos.value("z", 0.0));
 
-    KDL::Rotation r = KDL::Rotation::Quaternion(
+    rocos::Rotation r = rocos::Rotation::Quaternion(
         rot.value("x", 0.0),
         rot.value("y", 0.0),
         rot.value("z", 0.0),
         rot.value("w", 1.0));
 
-    return KDL::Frame(r, p);
+    return rocos::Frame(r, p);
 }
 
 std::string RobotHttpServer::getUrdfPath() { return robot_ != nullptr ? robot_->GetUrdfPath() : "robot.urdf"; }
 
-nlohmann::json RobotHttpServer::frameToJson(const KDL::Frame& frame) {
+nlohmann::json RobotHttpServer::frameToJson(const rocos::Frame& frame) {
     double x, y, z, w;
     frame.M.GetQuaternion(x, y, z, w);
 
@@ -1142,7 +1141,7 @@ void RobotHttpServer::handleSetLoadParameters(const httplib::Request& req, httpl
     const double mass = body["mass"].get<double>();
 
     // com 可选，默认质心在法兰原点 [0,0,0]
-    KDL::Vector com(0.0, 0.0, 0.0);
+    rocos::Vector com(0.0, 0.0, 0.0);
     if (body.contains("com")) {
         const auto& com_json = body["com"];
         if (!com_json.is_array() || com_json.size() != 3) {
@@ -1155,7 +1154,7 @@ void RobotHttpServer::handleSetLoadParameters(const httplib::Request& req, httpl
                 return;
             }
         }
-        com = KDL::Vector(com_json[0].get<double>(),
+        com = rocos::Vector(com_json[0].get<double>(),
                           com_json[1].get<double>(),
                           com_json[2].get<double>());
     }
@@ -1180,7 +1179,7 @@ void RobotHttpServer::handleGetLoadParameters(const httplib::Request& req, httpl
     nlohmann::json data;
     data["valid"] = robot_->HasLoadParameters();
     data["mass"] = robot_->GetLoadMass();
-    const KDL::Vector com = robot_->GetLoadCom();
+    const rocos::Vector com = robot_->GetLoadCom();
     data["com"] = {com.x(), com.y(), com.z()};
 
     sendJson(res, true, 0, "ok", data);
@@ -2406,7 +2405,7 @@ void RobotHttpServer::handleCalibrationRun(const httplib::Request& req, httplib:
     auto& session = found->second;
     session.result.reset();
     if (!calibrationContextCurrent(session)) { sendJson(res,false,4004,"Tool installation changed; restart calibration"); return; }
-    std::array<KDL::Frame, 6> poses;
+    std::array<rocos::Frame, 6> poses;
     for (size_t i = 0; i < poses.size(); ++i) {
         if (!session.samples[i]) { sendJson(res, false, 4001, "Capture all six points before calculating"); return; }
         poses[i] = session.samples[i]->flange;

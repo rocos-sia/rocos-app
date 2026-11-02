@@ -79,18 +79,18 @@ public:
     /// @param mass 负载质量 [kg]，必须 >= 0（0 表示无负载）
     /// @param com  负载质心（末端坐标系下）[m]
     /// @note 须在 SetReady() 之前调用；调用后 SetReady() 不再执行辨识流程
-    void SetLoadParameters(double mass, const KDL::Vector& com);
+    void SetLoadParameters(double mass, const rocos::Vector& com);
 
     // ---- 辨识完成回调 ----
     /// @brief 注册辨识完成回调，辨识成功进入拖动模式时触发
     /// @param cb 回调 (mass, com)，供 Robot 层回写并落盘辨识结果
-    void SetLoadParamsCallback(std::function<void(double, const KDL::Vector&)> cb);
+    void SetLoadParamsCallback(std::function<void(double, const rocos::Vector&)> cb);
 
     // ---- 辨识结果查询 ----
     /// @brief 获取辨识出的负载质量 [kg]，未辨识时返回 0
     double GetIdentifiedMass() const { return load_mass_; }
     /// @brief 获取辨识出的负载质心（末端坐标系下）[m]
-    KDL::Vector GetIdentifiedCom() const { return load_com_; }
+    rocos::Vector GetIdentifiedCom() const { return load_com_; }
     /// @brief 辨识是否已完成
     bool IsIdentified() const { return identified_; }
     /// @brief 是否已进入拖动模式
@@ -127,7 +127,7 @@ private:
     /// @brief 计算包含负载的总重力补偿力矩 τ_total = τ_robot + J^T·W_load
     Result computeTotalGravityCompensation(const JntArray& q_act, JntArray& tau_total);
     /// @brief 返回基坐标系下的重力向量 [0, 0, -g]
-    KDL::Vector gravityVector() const;
+    rocos::Vector gravityVector() const;
 
     // ---- 成员变量 ----
     HardwareInterface* hardware_{nullptr};
@@ -162,12 +162,12 @@ private:
 
     // 辨识结果
     double load_mass_{0.0};              // 负载质量 [kg]
-    KDL::Vector load_com_;               // 负载质心（末端坐标系下）[m]
+    rocos::Vector load_com_;               // 负载质心（末端坐标系下）[m]
     bool identified_{false};             // 辨识是否完成
     bool load_params_preset_{false};     // 是否已预置负载参数（预置则跳过辨识）
 
     // 辨识完成回调（Robot 层用于回写 + 落盘）
-    std::function<void(double, const KDL::Vector&)> load_params_cb_;
+    std::function<void(double, const rocos::Vector&)> load_params_cb_;
 
     // 拖动参数
     double Kd_drag_{5.0};                // 拖动阻尼 [Nm·s/rad]

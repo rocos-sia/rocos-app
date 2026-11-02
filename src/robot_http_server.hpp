@@ -24,7 +24,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <json.hpp>
-#include <kdl/frames.hpp>
+#include "types.hpp"
 #include <unordered_map>
 #include <memory>
 #include <mutex>
@@ -166,10 +166,10 @@ private:
                           const std::string& success_message);
     nlohmann::json scriptStatusToJson() const;
 
-    KDL::Frame jsonToFrame(const nlohmann::json& j);
+    rocos::Frame jsonToFrame(const nlohmann::json& j);
 
-    KDL::Frame jsonToFrame(const nlohmann::json& pos, const nlohmann::json& rot);
-    nlohmann::json frameToJson(const KDL::Frame& frame);
+    rocos::Frame jsonToFrame(const nlohmann::json& pos, const nlohmann::json& rot);
+    nlohmann::json frameToJson(const rocos::Frame& frame);
     std::string getUrdfPath();
 
     // ---- Async Task Management ----

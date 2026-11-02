@@ -270,7 +270,7 @@ JntArray MoveJogK::computeJointVelocity() {
     } else {
         // 笛卡尔空间：Jacobian 伪逆
         const auto& tw = std::get<Twist>(direction_);
-        KDL::Twist cart_vel(tw.vel * s, tw.rot * s);
+        rocos::Twist cart_vel(tw.vel * s, tw.rot * s);
 
         if (model_) {
             model_->GetJacobian(q_integral_, jacobian_);
@@ -300,11 +300,11 @@ JntArray MoveJogK::computeJointVelocity() {
                 clik_initialized_ = true;
             } else {
                 // 位置递推
-                fk_target_.p += KDL::Vector(tw.vel.x(), tw.vel.y(), tw.vel.z()) * s * dt_;
+                fk_target_.p += rocos::Vector(tw.vel.x(), tw.vel.y(), tw.vel.z()) * s * dt_;
                 // 姿态递推：Rot 内部会归一化轴，angle 须乘 tw.rot 的模长
                 const double rot_norm = tw.rot.Norm();
                 if (rot_norm > 1e-12) {
-                    fk_target_.M = KDL::Rotation::Rot(tw.rot, rot_norm * s * dt_)
+                    fk_target_.M = rocos::Rotation::Rot(tw.rot, rot_norm * s * dt_)
                                    * fk_target_.M;
                 }
             }
@@ -312,9 +312,9 @@ JntArray MoveJogK::computeJointVelocity() {
             // 误差 = target ⊖ actual
             Frame fk_cur;
             model_->ForwardKinematics(q_integral_, fk_cur);
-            KDL::Vector pos_err = fk_target_.p - fk_cur.p;
-            KDL::Rotation R_err = fk_target_.M * fk_cur.M.Inverse();
-            KDL::Vector rot_err = R_err.GetRot();
+            rocos::Vector pos_err = fk_target_.p - fk_cur.p;
+            rocos::Rotation R_err = fk_target_.M * fk_cur.M.Inverse();
+            rocos::Vector rot_err = R_err.GetRot();
 
             Eigen::VectorXd v_err(6);
             v_err << pos_err.x(), pos_err.y(), pos_err.z(),

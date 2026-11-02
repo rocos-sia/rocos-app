@@ -124,7 +124,7 @@ public:
         double x = q_in.rows() > 0 ? q_in(0) : 0.0;
         double y = q_in.rows() > 1 ? q_in(1) : 0.0;
         double z = q_in.rows() > 2 ? q_in(2) : 0.0;
-        p_out = rocos::Frame(KDL::Rotation::Identity(), KDL::Vector(x, y, z));
+        p_out = rocos::Frame(rocos::Rotation::Identity(), rocos::Vector(x, y, z));
         return rocos::Result::NoError;
     }
 
@@ -158,21 +158,21 @@ public:
         // 列 6+: 混合列   → Twist(vel=[0.3,0.3,0.3], rot=[0.3,0.3,0.3])
 
         for (unsigned int j = 0; j < n; ++j) {
-            KDL::Vector vel(0.0, 0.0, 0.0), rot(0.0, 0.0, 0.0);
+            rocos::Vector vel(0.0, 0.0, 0.0), rot(0.0, 0.0, 0.0);
             switch (j) {
-                case 0: vel = KDL::Vector(1.0, 0.0, 0.0); break;
-                case 1: vel = KDL::Vector(0.0, 1.0, 0.0); break;
-                case 2: vel = KDL::Vector(0.0, 0.0, 1.0); break;
-                case 3: rot = KDL::Vector(1.0, 0.0, 0.0); break;
-                case 4: rot = KDL::Vector(0.0, 1.0, 0.0); break;
-                case 5: rot = KDL::Vector(0.0, 0.0, 1.0); break;
+                case 0: vel = rocos::Vector(1.0, 0.0, 0.0); break;
+                case 1: vel = rocos::Vector(0.0, 1.0, 0.0); break;
+                case 2: vel = rocos::Vector(0.0, 0.0, 1.0); break;
+                case 3: rot = rocos::Vector(1.0, 0.0, 0.0); break;
+                case 4: rot = rocos::Vector(0.0, 1.0, 0.0); break;
+                case 5: rot = rocos::Vector(0.0, 0.0, 1.0); break;
                 default:
                     // 其余列为混合，构造 1 维零空间 (n=7 时有 rank 6)
-                    vel = KDL::Vector(0.3, 0.3, 0.3);
-                    rot = KDL::Vector(0.3, 0.3, 0.3);
+                    vel = rocos::Vector(0.3, 0.3, 0.3);
+                    rot = rocos::Vector(0.3, 0.3, 0.3);
                     break;
             }
-            J_out.setColumn(j, KDL::Twist(vel, rot));
+            J_out.setColumn(j, rocos::Twist(vel, rot));
         }
         return rocos::Result::NoError;
     }
@@ -240,7 +240,7 @@ rocos::JntArray makeConstJntArray(unsigned int n, double val = 0.0) {
 
 /// @brief 构造位姿：仅平移 (x,y,z)，无旋转
 rocos::Frame makeFrame(double x, double y, double z) {
-    return rocos::Frame(KDL::Rotation::Identity(), KDL::Vector(x, y, z));
+    return rocos::Frame(rocos::Rotation::Identity(), rocos::Vector(x, y, z));
 }
 
 }  // namespace
@@ -1002,8 +1002,8 @@ public:
         double y = q_in.rows() > 1 ? q_in(1) : 0.0;
         double z = q_in.rows() > 2 ? q_in(2) : 0.0;
         // 绕 Z 轴旋转 90°: R_cur = Rz(π/2)
-        p_out = rocos::Frame(KDL::Rotation::RPY(0.0, 0.0, M_PI_2),
-                             KDL::Vector(x, y, z));
+        p_out = rocos::Frame(rocos::Rotation::RPY(0.0, 0.0, M_PI_2),
+                             rocos::Vector(x, y, z));
         return rocos::Result::NoError;
     }
 
@@ -1020,20 +1020,20 @@ public:
         const unsigned int n = q.rows();
         J_out.resize(n);
         for (unsigned int j = 0; j < n; ++j) {
-            KDL::Vector vel(0.0, 0.0, 0.0), rot(0.0, 0.0, 0.0);
+            rocos::Vector vel(0.0, 0.0, 0.0), rot(0.0, 0.0, 0.0);
             switch (j) {
-                case 0: vel = KDL::Vector(1.0, 0.0, 0.0); break;
-                case 1: vel = KDL::Vector(0.0, 1.0, 0.0); break;
-                case 2: vel = KDL::Vector(0.0, 0.0, 1.0); break;
-                case 3: rot = KDL::Vector(1.0, 0.0, 0.0); break;
-                case 4: rot = KDL::Vector(0.0, 1.0, 0.0); break;
-                case 5: rot = KDL::Vector(0.0, 0.0, 1.0); break;
+                case 0: vel = rocos::Vector(1.0, 0.0, 0.0); break;
+                case 1: vel = rocos::Vector(0.0, 1.0, 0.0); break;
+                case 2: vel = rocos::Vector(0.0, 0.0, 1.0); break;
+                case 3: rot = rocos::Vector(1.0, 0.0, 0.0); break;
+                case 4: rot = rocos::Vector(0.0, 1.0, 0.0); break;
+                case 5: rot = rocos::Vector(0.0, 0.0, 1.0); break;
                 default:
-                    vel = KDL::Vector(0.3, 0.3, 0.3);
-                    rot = KDL::Vector(0.3, 0.3, 0.3);
+                    vel = rocos::Vector(0.3, 0.3, 0.3);
+                    rot = rocos::Vector(0.3, 0.3, 0.3);
                     break;
             }
-            J_out.setColumn(j, KDL::Twist(vel, rot));
+            J_out.setColumn(j, rocos::Twist(vel, rot));
         }
         return rocos::Result::NoError;
     }
@@ -1085,7 +1085,7 @@ TEST_CASE("CartesianImpedance - 非零姿态: 位置误差方向正确") {
     // p_des = (0, 1.0, 0) → 基坐标系下误差在 +Y 方向
     //
     // 修复后:
-    //   Δx_base.vel = (0, 1.0, 0)           ← KDL::diff 在基坐标系
+    //   Δx_base.vel = (0, 1.0, 0)           ← rocos::diff 在基坐标系
     //   Δx_tool.vel = Rz(-90°) * (0,1,0) = (1.0, 0, 0)  ← 变换到工具系
     //   F_cur.force  = Kp(1500) * (1,0,0) = (1500, 0, 0)    ← 工具系 +X
     //   F_base.force = Rz(90°) * (1500,0,0) = (0, 1500, 0) ← 基坐标系 +Y ✓
@@ -1105,8 +1105,8 @@ TEST_CASE("CartesianImpedance - 非零姿态: 位置误差方向正确") {
     ctrl.SetHardware(&hw);
     ctrl.SetModel(&model);
     // x_des: p = (0, 1.0, 0), R = Rz(90°)（与当前姿态相同，误差仅为平移）
-    rocos::Frame x_des(KDL::Rotation::RPY(0.0, 0.0, M_PI_2),
-                       KDL::Vector(0.0, 1.0, 0.0));
+    rocos::Frame x_des(rocos::Rotation::RPY(0.0, 0.0, M_PI_2),
+                       rocos::Vector(0.0, 1.0, 0.0));
     ctrl.GenerateCmd(rocos::Reference{x_des}, dummy_q_cmd);
 
     CHECK(ctrl.UpdateCmd(makeConstJntArray(7)) == rocos::Result::NoError);
@@ -1128,8 +1128,8 @@ TEST_CASE("CartesianImpedance - 非零姿态: 零误差 → 零阻抗力") {
     ctrl.SetHardware(&hw);
     ctrl.SetModel(&model);
     // x_des == x_cur: p=(0,0,0), R=Rz(90°)
-    rocos::Frame x_des(KDL::Rotation::RPY(0.0, 0.0, M_PI_2),
-                       KDL::Vector(0.0, 0.0, 0.0));
+    rocos::Frame x_des(rocos::Rotation::RPY(0.0, 0.0, M_PI_2),
+                       rocos::Vector(0.0, 0.0, 0.0));
     ctrl.GenerateCmd(rocos::Reference{x_des}, dummy_q_cmd);
 
     CHECK(ctrl.UpdateCmd(makeConstJntArray(7)) == rocos::Result::NoError);
@@ -1158,8 +1158,8 @@ TEST_CASE("CartesianImpedance - 非零姿态: X 方向误差在旋转后仍正�
     rocos::CartesianImpedanceController ctrl;
     ctrl.SetHardware(&hw);
     ctrl.SetModel(&model);
-    rocos::Frame x_des(KDL::Rotation::RPY(0.0, 0.0, M_PI_2),
-                       KDL::Vector(1.0, 0.0, 0.0));
+    rocos::Frame x_des(rocos::Rotation::RPY(0.0, 0.0, M_PI_2),
+                       rocos::Vector(1.0, 0.0, 0.0));
     ctrl.GenerateCmd(rocos::Reference{x_des}, dummy_q_cmd);
 
     CHECK(ctrl.UpdateCmd(makeConstJntArray(7)) == rocos::Result::NoError);
@@ -1181,8 +1181,8 @@ TEST_CASE("CartesianImpedance - 非零姿态: 合力大小不随姿态改变") {
     ctrl.SetHardware(&hw);
     ctrl.SetModel(&model);
     // 期望位置在基坐标系 (1,0,0)，距当前 1m
-    rocos::Frame x_des(KDL::Rotation::RPY(0.0, 0.0, M_PI_2),
-                       KDL::Vector(1.0, 0.0, 0.0));
+    rocos::Frame x_des(rocos::Rotation::RPY(0.0, 0.0, M_PI_2),
+                       rocos::Vector(1.0, 0.0, 0.0));
     ctrl.GenerateCmd(rocos::Reference{x_des}, dummy_q_cmd);
 
     CHECK(ctrl.UpdateCmd(makeConstJntArray(7)) == rocos::Result::NoError);

@@ -2,7 +2,7 @@
 #include "tool_package.hpp"
 #include "json.hpp"
 namespace rocos {
-inline nlohmann::json toolPoseJson(const KDL::Frame& frame) {
+inline nlohmann::json toolPoseJson(const rocos::Frame& frame) {
     double x,y,z,w; frame.M.GetQuaternion(x,y,z,w);
     return {{"position",{{"x",frame.p.x()},{"y",frame.p.y()},{"z",frame.p.z()}}},
             {"orientation",{{"x",x},{"y",y},{"z",z},{"w",w}}}};

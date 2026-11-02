@@ -6,19 +6,19 @@
 
 namespace rocos {
 namespace {
-Eigen::Matrix3d rotation(const KDL::Frame& frame) {
+Eigen::Matrix3d rotation(const rocos::Frame& frame) {
     Eigen::Matrix3d result;
     for (int i = 0; i < 3; ++i)
         for (int j = 0; j < 3; ++j) result(i, j) = frame.M(i, j);
     return result;
 }
-Eigen::Vector3d position(const KDL::Frame& frame) {
+Eigen::Vector3d position(const rocos::Frame& frame) {
     return {frame.p.x(), frame.p.y(), frame.p.z()};
 }
 constexpr double pi = 3.14159265358979323846;
 }
 
-bool solveSixPointTool(const std::array<KDL::Frame, 6>& samples,
+bool solveSixPointTool(const std::array<rocos::Frame, 6>& samples,
                       double max_allowed_error, ToolCalibrationSolution& result,
                       std::string& error) {
     result = {};
@@ -92,11 +92,11 @@ bool solveSixPointTool(const std::array<KDL::Frame, 6>& samples,
     Eigen::Matrix3d base_tool;
     base_tool.col(0) = x; base_tool.col(1) = y; base_tool.col(2) = z;
     const Eigen::Matrix3d flange_tool = r[3].transpose() * base_tool;
-    result.frame = KDL::Frame(KDL::Rotation(
+    result.frame = rocos::Frame(rocos::Rotation(
         flange_tool(0, 0), flange_tool(0, 1), flange_tool(0, 2),
         flange_tool(1, 0), flange_tool(1, 1), flange_tool(1, 2),
         flange_tool(2, 0), flange_tool(2, 1), flange_tool(2, 2)),
-        KDL::Vector(tcp.x(), tcp.y(), tcp.z()));
+        rocos::Vector(tcp.x(), tcp.y(), tcp.z()));
     return true;
 }
 } // namespace rocos

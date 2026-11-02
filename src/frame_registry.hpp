@@ -2,7 +2,7 @@
 
 #include "result.hpp"
 #include "tool_package.hpp"
-#include <kdl/frames.hpp>
+#include "types.hpp"
 #include <map>
 #include <memory>
 #include <mutex>
@@ -11,7 +11,7 @@
 
 namespace rocos {
 struct FrameRegistryState {
-    std::map<std::string, KDL::Frame> tools, objects;
+    std::map<std::string, rocos::Frame> tools, objects;
     std::string active_tool, active_object;
     std::string robot_id;
     std::map<std::string, ToolPackage> packages;
@@ -22,14 +22,14 @@ class FrameRegistry {
 public:
     explicit FrameRegistry(std::string path = "frames.yaml", std::string library = "", std::string robot_id = "default");
     static bool validName(const std::string& name);
-    static bool validFrame(const KDL::Frame& frame);
+    static bool validFrame(const rocos::Frame& frame);
     // 同一注册表快照下解析工具并计算基座到 TCP；空名称使用活动工具，无工具时为法兰。
-    static Result resolveTcp(const FrameRegistryState& state, const KDL::Frame& flange,
-                             KDL::Frame& tcp, const std::string& tool_name = "");
+    static Result resolveTcp(const FrameRegistryState& state, const rocos::Frame& flange,
+                             rocos::Frame& tcp, const std::string& tool_name = "");
     std::shared_ptr<const FrameRegistryState> snapshot() const;
     std::vector<std::string> names(bool tool) const;
-    Result get(const std::string& name, bool tool, KDL::Frame& frame) const;
-    Result set(const std::string& name, const KDL::Frame& frame, bool tool,
+    Result get(const std::string& name, bool tool, rocos::Frame& frame) const;
+    Result set(const std::string& name, const rocos::Frame& frame, bool tool,
                bool add_only = false, bool persist = false, const std::string& previous_name = "");
     Result remove(const std::string& name, bool tool, bool persist = false);
     Result activate(const std::string& name, bool tool, bool persist = false);
@@ -42,7 +42,7 @@ public:
     void reloadPackages(bool persist = true);
     // 启动配置只选择一个工具；不读取旧 frames 覆盖设备安装。
     void initializePackage(const ToolPackage& configured);
-    void updatePackage(const std::string& name, const KDL::Frame& mount, const KDL::Frame& tcp,
+    void updatePackage(const std::string& name, const rocos::Frame& mount, const rocos::Frame& tcp,
                        const std::string& digest, uint64_t revision, const YAML::Node& calibration = YAML::Node());
     std::string exportInstallation(const std::string& name) const;
     void importInstallation(const std::string& yaml);

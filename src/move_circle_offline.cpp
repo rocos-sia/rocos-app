@@ -33,27 +33,27 @@ bool MoveCircleOffline::buildArcFrame(const Frame& start,
                                        const Frame& center,
                                        Frame& arc_out,
                                        double& radius) {
-    const KDL::Vector c = center.p;
+    const rocos::Vector c = center.p;
 
-    KDL::Vector axis_x = start.p - c;
+    rocos::Vector axis_x = start.p - c;
     radius = axis_x.Normalize();
     if (radius < kArcEpsilon) return false;
 
-    KDL::Vector axis_z = center.M.UnitZ();
-    const double proj = KDL::dot(axis_z, axis_x);
+    rocos::Vector axis_z = center.M.UnitZ();
+    const double proj = rocos::dot(axis_z, axis_x);
     axis_z -= proj * axis_x;
     if (axis_z.Normalize() < kArcEpsilon) {
-        axis_z = KDL::Vector(0, 0, 1);
-        if (std::abs(KDL::dot(axis_z, axis_x)) > 0.999)
-            axis_z = KDL::Vector(0, 1, 0);
-        axis_z -= KDL::dot(axis_z, axis_x) * axis_x;
+        axis_z = rocos::Vector(0, 0, 1);
+        if (std::abs(rocos::dot(axis_z, axis_x)) > 0.999)
+            axis_z = rocos::Vector(0, 1, 0);
+        axis_z -= rocos::dot(axis_z, axis_x) * axis_x;
         axis_z.Normalize();
     }
 
-    KDL::Vector axis_y = axis_z * axis_x;
+    rocos::Vector axis_y = axis_z * axis_x;
     axis_y.Normalize();
 
-    arc_out = KDL::Frame(KDL::Rotation(axis_x, axis_y, axis_z), c);
+    arc_out = rocos::Frame(rocos::Rotation(axis_x, axis_y, axis_z), c);
     return true;
 }
 
@@ -63,43 +63,43 @@ bool MoveCircleOffline::solveThreePoints(const Frame& start,
                                           Frame& arc_out,
                                           double& radius,
                                           double& theta) {
-    KDL::Vector v1 = via.p - start.p;
-    KDL::Vector v2 = goal.p - start.p;
+    rocos::Vector v1 = via.p - start.p;
+    rocos::Vector v2 = goal.p - start.p;
     if (v1.Normalize() < kArcEpsilon) return false;
     if (v2.Normalize() < kArcEpsilon) return false;
 
-    KDL::Vector axis_z = v1 * v2;
+    rocos::Vector axis_z = v1 * v2;
     if (axis_z.Normalize() < kArcEpsilon) return false;
 
-    KDL::Vector axis_x = v1;
-    KDL::Vector axis_y = axis_z * axis_x;
+    rocos::Vector axis_x = v1;
+    rocos::Vector axis_y = axis_z * axis_x;
     axis_y.Normalize();
 
-    const KDL::Vector d1 = via.p - start.p;
-    const KDL::Vector d2 = goal.p - start.p;
-    const double bx = KDL::dot(d1, axis_x);
-    const double cx = KDL::dot(d2, axis_x);
-    const double cy = KDL::dot(d2, axis_y);
+    const rocos::Vector d1 = via.p - start.p;
+    const rocos::Vector d2 = goal.p - start.p;
+    const double bx = rocos::dot(d1, axis_x);
+    const double cx = rocos::dot(d2, axis_x);
+    const double cy = rocos::dot(d2, axis_y);
     if (std::abs(cy) < kArcEpsilon) return false;
 
     const double h = ((cx - bx / 2.0) * (cx - bx / 2.0) + cy * cy -
                       (bx / 2.0) * (bx / 2.0)) / (2.0 * cy);
-    const KDL::Vector center = start.p + axis_x * (bx / 2.0) + axis_y * h;
+    const rocos::Vector center = start.p + axis_x * (bx / 2.0) + axis_y * h;
 
-    KDL::Vector arc_x = start.p - center;
+    rocos::Vector arc_x = start.p - center;
     radius = arc_x.Normalize();
     if (radius < kArcEpsilon) return false;
 
-    KDL::Vector arc_z = axis_z;
-    arc_z -= KDL::dot(arc_z, arc_x) * arc_x;
+    rocos::Vector arc_z = axis_z;
+    arc_z -= rocos::dot(arc_z, arc_x) * arc_x;
     if (arc_z.Normalize() < kArcEpsilon) return false;
 
-    KDL::Vector arc_y = arc_z * arc_x;
+    rocos::Vector arc_y = arc_z * arc_x;
     arc_y.Normalize();
 
-    arc_out = KDL::Frame(KDL::Rotation(arc_x, arc_y, arc_z), center);
+    arc_out = rocos::Frame(rocos::Rotation(arc_x, arc_y, arc_z), center);
 
-    const KDL::Vector end_local = arc_out.Inverse() * goal.p;
+    const rocos::Vector end_local = arc_out.Inverse() * goal.p;
     double t = std::atan2(end_local(1), end_local(0));
     if (t < 0.0) t += 2.0 * M_PI;
     theta = t;
@@ -239,10 +239,10 @@ bool MoveCircleOffline::computeNormalizedLimits() {
 
 Frame MoveCircleOffline::interpolatePose(double s) const {
     const double angle = s * theta_;
-    const KDL::Vector arc_pos(radius_ * std::cos(angle),
+    const rocos::Vector arc_pos(radius_ * std::cos(angle),
                                radius_ * std::sin(angle),
                                0.0);
-    return KDL::Frame(pose_start_.M, arc_frame_ * arc_pos);
+    return rocos::Frame(pose_start_.M, arc_frame_ * arc_pos);
 }
 
 // ============================================================================
@@ -257,14 +257,14 @@ Twist MoveCircleOffline::computeCartesianTwist(double s_dot) const {
     const double angle = profile_.position() * theta_;
 
     // 切向单位向量（局部坐标 → 世界）
-    const KDL::Vector tangent_local(-std::sin(angle), std::cos(angle), 0.0);
-    const KDL::Vector tangent_world = arc_frame_.M * tangent_local;
+    const rocos::Vector tangent_local(-std::sin(angle), std::cos(angle), 0.0);
+    const rocos::Vector tangent_world = arc_frame_.M * tangent_local;
 
     // v = R·θ·s_dot（θ 带符号决定方向，不用 abs(path_length_)）
     const double speed = radius_ * theta_ * s_dot;
-    const KDL::Vector v = tangent_world * speed;
+    const rocos::Vector v = tangent_world * speed;
 
-    return Twist(v, KDL::Vector::Zero());
+    return Twist(v, rocos::Vector::Zero());
 }
 
 // ============================================================================

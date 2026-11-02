@@ -373,14 +373,14 @@ void MoveServo::udpReceiveLoop() {
 
 Frame MoveServo::matrixToFrame(const std::array<double, 16>& mat) {
     // mat 是 row-major 4x4 齐次变换矩阵
-    // KDL::Rotation 构造以 column-major 方式接收 9 个元素
+    // rocos::Rotation 的 9 元素构造使用 row-major 顺序
     // mat[i*4 + j] 对应第 i 行、第 j 列
-    KDL::Rotation R(
-        mat[0], mat[1], mat[2],    // 第 0 列: (0,0), (0,1), (0,2)
-        mat[4], mat[5], mat[6],    // 第 1 列: (1,0), (1,1), (1,2)
-        mat[8], mat[9], mat[10]    // 第 2 列: (2,0), (2,1), (2,2)
+    rocos::Rotation R(
+        mat[0], mat[1], mat[2],    // 第 0 行: (0,0), (0,1), (0,2)
+        mat[4], mat[5], mat[6],    // 第 1 行: (1,0), (1,1), (1,2)
+        mat[8], mat[9], mat[10]    // 第 2 行: (2,0), (2,1), (2,2)
     );
-    KDL::Vector p(mat[3], mat[7], mat[11]);  // 平移: (0,3), (1,3), (2,3)
+    rocos::Vector p(mat[3], mat[7], mat[11]);  // 平移: (0,3), (1,3), (2,3)
     return {R, p};
 }
 

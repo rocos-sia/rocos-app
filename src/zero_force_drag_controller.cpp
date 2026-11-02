@@ -58,7 +58,7 @@ bool ZeroForceDragController::Reset() {
     if (!load_params_preset_) {
         identified_ = false;
         load_mass_ = 0.0;
-        load_com_ = KDL::Vector::Zero();
+        load_com_ = rocos::Vector::Zero();
     }
     return true;
 }
@@ -525,7 +525,7 @@ Result ZeroForceDragController::computeTotalGravityCompensation(
     res = model_->ForwardKinematics(q_act, x_ee);
     if (res != Result::NoError) return res;
 
-    const KDL::Rotation& R_ee = x_ee.M;
+    const rocos::Rotation& R_ee = x_ee.M;
 
     // 4. Jacobian
     Jacobian J_out;
@@ -533,12 +533,12 @@ Result ZeroForceDragController::computeTotalGravityCompensation(
     if (res != Result::NoError) return res;
 
     // 5. 负载质心变换到基坐标系
-    KDL::Vector g_vec = gravityVector();
-    KDL::Vector r_com_base = R_ee * load_com_;
+    rocos::Vector g_vec = gravityVector();
+    rocos::Vector r_com_base = R_ee * load_com_;
 
     // 6. 负载力旋量（基坐标系）
-    KDL::Vector F_load = load_mass_ * g_vec;
-    KDL::Vector M_load = r_com_base * F_load;  // KDL 叉积
+    rocos::Vector F_load = load_mass_ * g_vec;
+    rocos::Vector M_load = r_com_base * F_load;  // KDL 叉积
 
     // 7. 构建 6×1 列向量
     Eigen::Matrix<double, 6, 1> W_vec;
@@ -583,7 +583,7 @@ Result ZeroForceDragController::computeLoadParams() {
         return Result::LoadIdentFitFail;  // 至少 2 组数据
     }
 
-    KDL::Vector g_vec = gravityVector();
+    rocos::Vector g_vec = gravityVector();
     const double gx = g_vec.x();
     const double gy = g_vec.y();
     const double gz = g_vec.z();
@@ -602,7 +602,7 @@ Result ZeroForceDragController::computeLoadParams() {
         Frame x_ee;
         Result res = model_->ForwardKinematics(q_k, x_ee);
         if (res != Result::NoError) return res;
-        const KDL::Rotation& R = x_ee.M;
+        const rocos::Rotation& R = x_ee.M;
 
         // Jacobian
         Jacobian J_out;
@@ -693,7 +693,7 @@ Result ZeroForceDragController::computeLoadParams() {
     }
 
     load_mass_ = p_mass;
-    load_com_ = KDL::Vector(p_mcx / p_mass, p_mcy / p_mass, p_mcz / p_mass);
+    load_com_ = rocos::Vector(p_mcx / p_mass, p_mcy / p_mass, p_mcz / p_mass);
 
     return Result::NoError;
 }
@@ -702,9 +702,9 @@ Result ZeroForceDragController::computeLoadParams() {
 // gravityVector — 基坐标系下重力方向
 // ==========================================================================
 
-KDL::Vector ZeroForceDragController::gravityVector() const {
+rocos::Vector ZeroForceDragController::gravityVector() const {
     // 默认 Z 向下（与 URDF 中 gravity [0, 0, -9.81] 约定一致）
-    return KDL::Vector(0.0, 0.0, -g_);
+    return rocos::Vector(0.0, 0.0, -g_);
 }
 
 // ==========================================================================
@@ -740,7 +740,7 @@ void ZeroForceDragController::SetHoldThreshold(double v_low, double v_high) {
 }
 
 void ZeroForceDragController::SetLoadParameters(double mass,
-                                                const KDL::Vector& com) {
+                                                const rocos::Vector& com) {
     // 非法参数直接忽略，交由 SetReady 走辨识流程兜底；mass=0 表示无负载（合法）
     if (mass < 0.0 || !std::isfinite(mass) ||
         !std::isfinite(com.x()) || !std::isfinite(com.y()) ||
@@ -754,7 +754,7 @@ void ZeroForceDragController::SetLoadParameters(double mass,
 }
 
 void ZeroForceDragController::SetLoadParamsCallback(
-    std::function<void(double, const KDL::Vector&)> cb) {
+    std::function<void(double, const rocos::Vector&)> cb) {
     load_params_cb_ = std::move(cb);
 }
 

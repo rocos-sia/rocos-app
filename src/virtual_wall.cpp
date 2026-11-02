@@ -26,7 +26,7 @@ namespace {
 
 /// @brief 计算向量的 Euclid 范数
 inline double vecNorm(const rocos::Vector& v) {
-    return std::sqrt(KDL::dot(v, v));
+    return std::sqrt(rocos::dot(v, v));
 }
 
 /// @brief 返回单位向量，零向量时返回 fallback
@@ -46,12 +46,12 @@ namespace rocos {
 
 double signedDistance(const PlaneWall& wall, const Vector& point) {
     const Vector diff = point - wall.point;
-    return KDL::dot(diff, wall.normal);
+    return rocos::dot(diff, wall.normal);
 }
 
 double signedDistance(const CylinderWall& wall, const Vector& point) {
     const Vector to_point = point - wall.center;
-    const double proj_len = KDL::dot(to_point, wall.axis);
+    const double proj_len = rocos::dot(to_point, wall.axis);
     const Vector proj = proj_len * wall.axis;
     const Vector radial = to_point - proj;
     const double radial_dist = vecNorm(radial);
@@ -109,7 +109,7 @@ Vector wallNormal(const PlaneWall& wall, const Vector& /*point*/) {
 
 Vector wallNormal(const CylinderWall& wall, const Vector& point) {
     const Vector to_point = point - wall.center;
-    const double proj_len = KDL::dot(to_point, wall.axis);
+    const double proj_len = rocos::dot(to_point, wall.axis);
     const Vector proj = proj_len * wall.axis;
     const Vector radial = to_point - proj;
 
@@ -168,7 +168,7 @@ Vector projectOntoBoundary(const PlaneWall& wall, const Vector& point) {
 
 Vector projectOntoBoundary(const CylinderWall& wall, const Vector& point) {
     const Vector to_point = point - wall.center;
-    const double proj_len = KDL::dot(to_point, wall.axis);
+    const double proj_len = rocos::dot(to_point, wall.axis);
     const Vector axial = proj_len * wall.axis;
     const Vector radial = to_point - axial;
     const double radial_len = vecNorm(radial);

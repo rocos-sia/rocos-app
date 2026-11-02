@@ -144,10 +144,10 @@ FTSensor Hardware::parseFTSensor(const YAML::Node& node) {
     if (node["offset"]) {
         const auto& off = node["offset"];
         ft.offset = Wrench(
-            KDL::Vector(yamlGetDouble(off, "fx", 0.0),
+            rocos::Vector(yamlGetDouble(off, "fx", 0.0),
                         yamlGetDouble(off, "fy", 0.0),
                         yamlGetDouble(off, "fz", 0.0)),
-            KDL::Vector(yamlGetDouble(off, "tx", 0.0),
+            rocos::Vector(yamlGetDouble(off, "tx", 0.0),
                         yamlGetDouble(off, "ty", 0.0),
                         yamlGetDouble(off, "tz", 0.0))
         );
@@ -793,10 +793,10 @@ Wrench Hardware::GetWrench() {
     };
 
     return Wrench(
-        KDL::Vector(safeRead(cache.fx) + ft.offset.force.x(),
+        rocos::Vector(safeRead(cache.fx) + ft.offset.force.x(),
                     safeRead(cache.fy) + ft.offset.force.y(),
                     safeRead(cache.fz) + ft.offset.force.z()),
-        KDL::Vector(safeRead(cache.tx) + ft.offset.torque.x(),
+        rocos::Vector(safeRead(cache.tx) + ft.offset.torque.x(),
                     safeRead(cache.ty) + ft.offset.torque.y(),
                     safeRead(cache.tz) + ft.offset.torque.z())
     );

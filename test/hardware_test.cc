@@ -21,17 +21,9 @@ const std::string kTmpConfig = "/tmp/hardware_test_tmp.yaml";
 // 辅助函数
 // ==========================================================================
 
-/// @brief 解析配置文件路径，依次尝试: cwd/build/ → ../ (源码根目录)
-///        支持 `./bin/hardware_test` 直接运行和 `ctest` 两种方式
+// 离线夹具独立于部署配置目录。
 static std::string cfg(const std::string& name) {
-    // 从 build/ 子目录运行时，config/ 在 ../config/
-    std::string path = "../../config/" + name;
-    std::ifstream test(path);
-    if (test.good()) {
-        return path;
-    }
-    // ctest 或从源码根目录运行时
-    return "config/" + name;
+    return std::string(ROCOS_HARDWARE_TEST_DATA) + "/" + name;
 }
 
 /// @brief 写入临时 YAML 文件，返回路径
