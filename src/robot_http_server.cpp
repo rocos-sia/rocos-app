@@ -181,6 +181,7 @@ RobotHttpServer::RobotHttpServer(Robot* robot, LuaScriptEngine* script_engine, i
     }
 
     frame_registry_ = robot ? &robot->frames_ : nullptr;
+    if (robot) motion_preview_ = [robot](const auto& request, auto& result) { return robot->PreviewMotion(request, result); };
     if (robot) state_snapshot_ = [robot] { return robot->GetRobotStateSnapshot(); };
     tcp_pose_ = [robot](Frame& tcp, const std::string& name) {
         return robot ? robot->GetTcpPose(tcp, name) : Result::ResourceUnavailable;
@@ -305,6 +306,7 @@ void RobotHttpServer::registerRoutes() {
     server_->Post("/api/robot/servo/mode", [this](auto& req, auto& res) { handleServoMode(req, res); });
 
     // Robot motion control
+    server_->Post("/api/robot/motion/preview", [this](auto& req, auto& res) { handlePreviewMotion(req, res); });
     server_->Post("/api/robot/movej", [this](auto& req, auto& res) { handleMoveJ(req, res); });
     server_->Post("/api/robot/movej_ik", [this](auto& req, auto& res) { handleMoveJ_IK(req, res); });
     server_->Post("/api/robot/movel", [this](auto& req, auto& res) { handleMoveL(req, res); });

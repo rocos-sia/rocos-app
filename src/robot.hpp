@@ -36,6 +36,7 @@
 
 // #include "dh_params_loader.hpp"
 #include "model_interface.hpp"
+#include "motion_preview.hpp"
 #include "motion_interface.hpp"
 #include "hardware_interface.hpp"
 #include "hardware.hpp"
@@ -232,6 +233,8 @@ class Robot {
 
   /// @brief 设置伺服运动模式（joint / cartesian），可在启动前或运行中调用
   Result SetServoMode(const std::string& mode_str);
+
+  Result PreviewMotion(const MotionPreviewRequest& request, MotionPreviewResult& result);
 
   Result MoveJ(const JntArray& q_goal,
                double v_limit = 1.0, double a_limit = 2.0, double j_limit = 10.0);
@@ -432,6 +435,7 @@ class Robot {
   void jointBinding();
   std::thread control_thread_;               // 控制线程句柄
   mutable std::mutex mtx_;
+  std::mutex preview_mutex_;
 
   // 命名坐标系注册表：key 是上位机展示和选择的坐标系 name，value 是对应位姿。
   FrameRegistry frames_;

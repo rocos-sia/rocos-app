@@ -1219,9 +1219,21 @@ namespace rocos {
     }
 
     // ============================================================================
-    // MoveJ：关节空间点到点，一次性下发跑完即停
+    // PreviewMotion：独立计算预览轨迹，不执行运动
     // ============================================================================
 
+    Result Robot::PreviewMotion(const MotionPreviewRequest& request, MotionPreviewResult& result) {
+        result = {};
+        // 限制为一个预览任务；不持有实时循环锁，不触发 FSM/Executor/Controller。
+        std::unique_lock<std::mutex> preview_lock(preview_mutex_, std::try_to_lock);
+        if (!preview_lock.owns_lock()) return Result::CallingConflictError;
+        const auto* source = dynamic_cast<const Model*>(model.get());
+        if (!source) return Result::ResourceUnavailable;
+        auto preview_model = source->CloneForPreview();
+        return GenerateMotionPreview(*preview_model, request, dt_, result);
+    }
+
+    // MoveJ：关节空间点到点，一次性下发跑完即停
     Result Robot::MoveJ(const JntArray &q_goal,
                         double v_limit, double a_limit, double j_limit) {
         auto command_lock = LockToolState();

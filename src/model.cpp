@@ -92,6 +92,20 @@ Model::Model(const std::string& urdf_file_path,
   UpdateSolvers();
 }
 
+std::unique_ptr<Model> Model::CloneForPreview() const {
+  auto copy = std::unique_ptr<Model>(new Model());
+  copy->chain_ = chain_;
+  copy->joint_names_ = joint_names_;
+  copy->q_min_ = q_min_;
+  copy->q_max_ = q_max_;
+  copy->q_vel_ = q_vel_;
+  copy->q_effort_ = q_effort_;
+  copy->gravity_ = gravity_;
+  copy->log_ptr_ = log_ptr_;
+  copy->UpdateSolvers();
+  return copy;
+}
+
 Result Model::ForwardKinematics(const JntArray& q_in, Frame& p_out) {
   if (fk_solver_->JntToCart(q_in, p_out) < 0) {
     emitLogEvent(LogEventType::Result, LogModule::Model, static_cast<int>(Result::FkCalcFail));

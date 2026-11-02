@@ -33,6 +33,9 @@ class Model : public ModelInterface {
 
   ~Model() override = default;
 
+  // 复制配置并创建独立求解器，不共享实时线程的可变计算状态。
+  std::unique_ptr<Model> CloneForPreview() const;
+
   Result ForwardKinematics(const JntArray& q_in, Frame& p_out) override;
   Result InverseKinematics(const JntArray& q_in, const Frame& p_in,
                            JntArray& q_out) override;
@@ -66,6 +69,7 @@ class Model : public ModelInterface {
   const Chain& GetChain() const noexcept { return chain_; }
 
  private:
+  Model() = default;
   inline void SetChain(const Chain& chain) { chain_ = chain; }
 
   bool SetChain(const Tree& tree, const std::string& base_link,

@@ -285,6 +285,11 @@ Result MoveLineOffline::Reset() {
     }
 
     while (true) {
+        if ((max_planning_steps_ && trajectory_.size() >= max_planning_steps_) ||
+            std::chrono::steady_clock::now() >= planning_deadline_) {
+            trajectory_.clear();
+            return Result::MotionLimit;
+        }
         const int rc = profile_.Update();
         if (rc < 0) {
             trajectory_.clear();
@@ -311,6 +316,10 @@ Result MoveLineOffline::Reset() {
     // 4. 逐点 IK 验证（前一个解 warm-start）
     JntArray q_prev = q_init_;
     for (auto& pt : trajectory_) {
+        if (std::chrono::steady_clock::now() >= planning_deadline_) {
+            trajectory_.clear();
+            return Result::MotionLimit;
+        }
         Frame frame = interpolatePose(pt.s);
         JntArray q_out(n_joints_);
 

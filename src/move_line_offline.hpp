@@ -26,6 +26,7 @@
 #include <Eigen/SVD>
 
 #include <vector>
+#include <chrono>
 
 namespace rocos {
 
@@ -74,6 +75,12 @@ public:
     /// @brief 设置 IK 暖启动初始关节位置（Reset 前必须调用）
     void SetInitialJointPosition(const JntArray& q);
 
+    // 仅预览任务设置预算；实机默认不改变既有规划行为。
+    void SetPlanningBudget(size_t max_steps, std::chrono::steady_clock::time_point deadline) {
+        max_planning_steps_ = max_steps;
+        planning_deadline_ = deadline;
+    }
+
     // ─── MotionInterface 接口 ───
 
     Result ValidateParameters() const override;
@@ -109,6 +116,8 @@ private:
     // ─── 执行模式 ───
     enum class Mode { Normal, Integrate };
 
+    size_t max_planning_steps_{0};
+    std::chrono::steady_clock::time_point planning_deadline_{std::chrono::steady_clock::time_point::max()};
     double dt_;
     UnitVelocityProfile profile_;
     ModelInterface* model_;  // 必需，不拥有

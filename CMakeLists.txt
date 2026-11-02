@@ -28,7 +28,7 @@ find_package(LibArchive REQUIRED)
 find_package(OpenSSL REQUIRED)
 
 # CMake VERSION 仅接受数字；完整 SemVer 版本单独拼接。
-set(ROCOS_APP_VERSION_PRERELEASE "rc.2")
+set(ROCOS_APP_VERSION_PRERELEASE "rc.3")
 set(ROCOS_APP_VERSION_FULL "${PROJECT_VERSION}")
 if(NOT ROCOS_APP_VERSION_PRERELEASE STREQUAL "")
     string(APPEND ROCOS_APP_VERSION_FULL "-${ROCOS_APP_VERSION_PRERELEASE}")
@@ -168,6 +168,8 @@ add_library(robot
         src/joint_binding.cpp
         src/model.cpp
 
+        src/motion_preview_http.cpp
+        src/motion_preview.cpp
         src/move_joint.cpp
         src/move_line.cpp
         src/move_line_offline.cpp
@@ -618,3 +620,9 @@ add_executable(tooling_http_test test/tooling_http_test.cc)
 target_link_libraries(tooling_http_test PRIVATE robot)
 add_test(NAME tooling_http_test COMMAND tooling_http_test)
 set_tests_properties(tooling_http_test PROPERTIES TIMEOUT 30 WORKING_DIRECTORY "${ROCOS_OFFLINE_TEST_DIRECTORY}")
+
+add_executable(motion_preview_test test/motion_preview_test.cc)
+target_link_libraries(motion_preview_test PRIVATE robot)
+target_compile_definitions(motion_preview_test PRIVATE PREVIEW_TEST_URDF="${CMAKE_CURRENT_SOURCE_DIR}/config/robots/talon/robot.urdf")
+add_test(NAME motion_preview_test COMMAND motion_preview_test)
+set_tests_properties(motion_preview_test PROPERTIES TIMEOUT 40 WORKING_DIRECTORY "${ROCOS_OFFLINE_TEST_DIRECTORY}")

@@ -84,6 +84,7 @@ private:
     void handleServoMode(const httplib::Request& req, httplib::Response& res);
 
     // ---- Motion Control ----
+    void handlePreviewMotion(const httplib::Request& req, httplib::Response& res);
     void handleMoveJ(const httplib::Request& req, httplib::Response& res);
     void handleMoveJ_IK(const httplib::Request& req, httplib::Response& res);
     void handleMoveL(const httplib::Request& req, httplib::Response& res);
@@ -237,6 +238,7 @@ private:
     const std::string web_root_;
     FrameRegistry* frame_registry_{nullptr};
     std::function<Robot::RobotStateSnapshot()> state_snapshot_;
+    std::function<Result(const MotionPreviewRequest&, MotionPreviewResult&)> motion_preview_;
     std::function<Result(Frame&, const std::string&)> tcp_pose_;
     std::function<bool()> tool_motion_busy_;
     std::function<Result(ToolCalibrationSample&)> calibration_capture_;

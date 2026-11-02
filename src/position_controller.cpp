@@ -18,6 +18,7 @@
 // email: luoyang@sia.cn
 
 #include "position_controller.hpp"
+#include "position_command_validation.hpp"
 #include "log_manager.hpp"
 
 #include <cmath>
@@ -154,52 +155,21 @@ Result PositionController::ValidatePositionCommand(const JntArray& q_cmd) {
     }
 
     const JntArray q_actual = hardware_->GetPosition();
-    const auto& q_lower = model_->GetPosLowerLimit();
-    const auto& q_upper = model_->GetPosUpperLimit();
-    const auto& q_vel_limit = model_->GetVelocityLimit();
-    const unsigned int joint_num = static_cast<unsigned int>(model_->GetJointNum());
-
-    if (joint_num == 0 || q_cmd.rows() != joint_num || q_actual.rows() != joint_num ||
-        q_lower.rows() != joint_num || q_upper.rows() != joint_num ||
-        q_vel_limit.rows() != joint_num) {
+    if (q_actual.rows() != static_cast<unsigned int>(model_->GetJointNum()))
         return Result::UnmatchedJointsNumber;
+    for (unsigned int i = 0; i < q_actual.rows(); ++i)
+        if (!std::isfinite(q_actual(i))) return Result::ParameterNanOrInf;
+    const double dt = static_cast<double>(hardware_->GetDt()) / 1'000'000.0;
+    const auto* previous = has_last_cmd_ && q_last_cmd_.rows() == q_cmd.rows()
+        ? &q_last_cmd_ : nullptr;
+    JointCommandViolation violation;
+    const auto result = ValidateJointCommand(*model_, q_cmd, previous, dt, &violation);
+    if (result == Result::PosLimit || result == Result::SpeedLimit) {
+        emitLogEvent(result == Result::PosLimit ? LogEventType::PositionLimit : LogEventType::VelocityLimit,
+                     LogModule::PositionController, static_cast<int>(result), violation.joint,
+                     violation.value, violation.lower, violation.upper);
     }
-
-    const uint32_t dt_us = hardware_->GetDt();
-    if (dt_us == 0) {
-        return Result::IllegalParameter;
-    }
-    const double dt = static_cast<double>(dt_us) / 1'000'000.0;
-
-    // 速度校验比较的是“指令步进”(q_cmd - q_last_cmd_)，而不是“指令 vs 反馈”
-    // (q_cmd - q_actual)。反馈位置天然滞后于指令（跟随误差），用它除以 dt 会误报 SpeedLimit。
-    const bool has_prev_cmd = has_last_cmd_ && q_last_cmd_.rows() == joint_num;
-
-    for (unsigned int i = 0; i < joint_num; ++i) {
-        if (!std::isfinite(q_cmd(i)) || !std::isfinite(q_actual(i)) ||
-            !std::isfinite(q_lower(i)) || !std::isfinite(q_upper(i)) ||
-            !std::isfinite(q_vel_limit(i))) {
-            return Result::ParameterNanOrInf;
-        }
-        if (q_cmd(i) < q_lower(i) || q_cmd(i) > q_upper(i)) {
-            emitLogEvent(LogEventType::PositionLimit, LogModule::PositionController,
-                         static_cast<int>(Result::PosLimit), i, q_cmd(i), q_lower(i), q_upper(i));
-            return Result::PosLimit;
-        }
-        if (q_vel_limit(i) < 0.0) {
-            return Result::IllegalParameter;
-        }
-        if (has_prev_cmd) {
-            const double cmd_velocity = std::abs(q_cmd(i) - q_last_cmd_(i)) / dt;
-            if (cmd_velocity > q_vel_limit(i)) {
-                emitLogEvent(LogEventType::VelocityLimit, LogModule::PositionController,
-                             static_cast<int>(Result::SpeedLimit), i, cmd_velocity, 0, q_vel_limit(i));
-                return Result::SpeedLimit;
-            }
-        }
-    }
-
-    return Result::NoError;
+    return result;
 }
 
 } // namespace rocos
