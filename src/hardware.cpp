@@ -389,9 +389,7 @@ void Hardware::SetMode(int8_t mode) {
 }
 
 void Hardware::SetEnabled() {
-    for (auto& drive : config_.drives) {
-        SetJointEnabled(drive.id);
-    }
+    setDriverStates(0, drive_sm_state_.size(), DriveState::OperationEnabled);
 }
 
 void Hardware::SetDisabled() {
@@ -663,28 +661,48 @@ void Hardware::engageStateMachine(size_t idx) {
 }
 
 bool Hardware::setDriverState(size_t idx, const DriveState targetState) {
-    auto& sm = drive_sm_state_[idx];
-    sm.stateChangeSuccessful = false;
-    sm.conductStateChange = true;
-    sm.targetState = targetState;
-    sm.lastCwChangeTime = std::chrono::system_clock::now();
+    return setDriverStates(idx, idx + 1, targetState);
+}
 
-    // 阻塞等待状态切换完成
-    auto start = std::chrono::system_clock::now();
+bool Hardware::setDriverStates(size_t begin, size_t end, DriveState targetState) {
+    {
+        // 批量发布目标，保证后台线程在同一轮开始推进所有驱动器。
+        std::lock_guard<std::mutex> lock(sm_mutex_);
+        const auto now = std::chrono::system_clock::now();
+        for (size_t i = begin; i < end; ++i) {
+            auto& sm = drive_sm_state_[i];
+            sm.stateChangeSuccessful = false;
+            sm.targetState = targetState;
+            sm.lastCwChangeTime = now;
+            sm.numOfSuccessfulReadings = 0;
+            sm.conductStateChange = true;
+        }
+    }
+
+    // 统一等待，超时不再随驱动器数量累加。
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(150);
     while (true) {
-        if (sm.stateChangeSuccessful) return true;
-        auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
-            std::chrono::system_clock::now() - start).count();
-        if (elapsed > 150000) return false;
+        {
+            std::lock_guard<std::mutex> lock(sm_mutex_);
+            bool allSuccessful = true;
+            for (size_t i = begin; i < end; ++i) {
+                allSuccessful = allSuccessful && drive_sm_state_[i].stateChangeSuccessful;
+            }
+            if (allSuccessful) return true;
+        }
+        if (std::chrono::steady_clock::now() >= deadline) return false;
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 }
 
 void Hardware::smWorkingThread() {
     while (sm_thread_running_) {
-        for (size_t i = 0; i < drive_sm_state_.size(); ++i) {
-            if (drive_sm_state_[i].conductStateChange) {
-                engageStateMachine(i);
+        {
+            std::lock_guard<std::mutex> lock(sm_mutex_);
+            for (size_t i = 0; i < drive_sm_state_.size(); ++i) {
+                if (drive_sm_state_[i].conductStateChange) {
+                    engageStateMachine(i);
+                }
             }
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));

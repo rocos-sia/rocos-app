@@ -22,6 +22,7 @@
 #include <chrono>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -326,7 +327,7 @@ private:
     struct DriveSMState {
         DriveState targetState{DriveState::NA};
         bool conductStateChange{false};
-        bool stateChangeSuccessful{false};  // 仅 bg 线程写 / 调用线程读，x86 上 bool 读写原子
+        bool stateChangeSuccessful{false};  // 由 sm_mutex_ 保护
         std::chrono::system_clock::time_point lastCwChangeTime;
         int numOfSuccessfulReadings{0};
     };
@@ -345,6 +346,9 @@ private:
     /// @brief 启动状态切换并阻塞等待完成（对应 old_drive setDriverState + setEnabled/setDisabled）
     /// @return true=切换成功, false=超时
     bool setDriverState(size_t idx, const DriveState targetState);
+
+    /// @brief 一次性启动 [begin, end) 内所有驱动器，并在统一超时内等待完成
+    bool setDriverStates(size_t begin, size_t end, DriveState targetState);
 
     /// @brief 状态机后台工作线程（对应 old_drive DriveGuard::workingThread）
     void smWorkingThread();
@@ -405,6 +409,7 @@ private:
 
     // CiA 402 状态机（与 drive_pdo_cache_ 并行，同一索引对应同一驱动器）
     std::vector<DriveSMState> drive_sm_state_;
+    std::mutex sm_mutex_;
     std::unique_ptr<std::thread> sm_thread_;
     std::atomic<bool> sm_thread_running_{false};
 };

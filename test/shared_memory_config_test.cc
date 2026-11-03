@@ -3,8 +3,10 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <chrono>
 #include <cstring>
 #include <iostream>
+#include <thread>
 
 #include "src/hardware.hpp"
 #include "src/pdo_entry.hpp"
@@ -20,25 +22,27 @@ struct BusFixture {
     const int id = nextBusId();
     rocos::SharedMemoryConfig master{id};
 
-    BusFixture() {
+    explicit BusFixture(int drive_count = 1) {
         REQUIRE(master.createSharedMemory());
-        REQUIRE(master.createPdDataMemoryProvider(16, 16));
+        REQUIRE(master.createPdDataMemoryProvider(8 * drive_count + 8, 8 * drive_count + 8));
         auto& bus = *master.ecatBus;
-        bus.slave_num = 1;
+        bus.slave_num = drive_count;
         bus.dt = 1000;
         // 未知主站状态及只有少量 PDO 都是有效布局，不能再用扫描特征推断结构位置。
         bus.current_state = 0;
-        auto& slave = bus.slaves[0];
-        slave.id = 0;
-        std::strcpy(slave.name, "test drive");
-        slave.input_var_num = 2;
-        slave.output_var_num = 2;
-        descriptor(slave.input_vars[0], "status", 1, 2);
-        descriptor(slave.input_vars[1], "position", 3, 4);
-        descriptor(slave.output_vars[0], "control", 1, 2);
-        descriptor(slave.output_vars[1], "target", 3, 4);
-        master.setSlaveInputVarValue<uint16_t>(0, 0, 0x40);
-        master.setSlaveInputVarValue<int32_t>(0, 1, 123);
+        for (int i = 0; i < drive_count; ++i) {
+            auto& slave = bus.slaves[i];
+            slave.id = i;
+            std::strcpy(slave.name, "test drive");
+            slave.input_var_num = 2;
+            slave.output_var_num = 2;
+            descriptor(slave.input_vars[0], "status", 8 * i + 1, 2);
+            descriptor(slave.input_vars[1], "position", 8 * i + 3, 4);
+            descriptor(slave.output_vars[0], "control", 8 * i + 1, 2);
+            descriptor(slave.output_vars[1], "target", 8 * i + 3, 4);
+            master.setSlaveInputVarValue<uint16_t>(i, 0, 0x40);
+            master.setSlaveInputVarValue<int32_t>(i, 1, 123);
+        }
         REQUIRE(master.publishReady());
     }
 
@@ -142,4 +146,84 @@ TEST_CASE_FIXTURE(BusFixture, "App compatibility include rejects an incompatible
     CHECK_THROWS_AS(rocos::EcatConfig::getInstance(id), std::runtime_error);
     master.header->abi_version = 2;
     CHECK(client.connect());
+}
+
+TEST_CASE("Hardware enables all drive state machines together") {
+    bool stalled = false;
+    SUBCASE("All drives must receive each transition before any drive advances") {}
+    SUBCASE("A stalled first drive does not delay the remaining drives") { stalled = true; }
+
+    BusFixture bus(3);
+    auto& master = bus.master;
+    REQUIRE(master.notifyClients());
+    const pid_t child = fork();
+    REQUIRE(child >= 0);
+    if (child == 0) {
+        try {
+            rocos::HardwareConfig config;
+            // 配置顺序与从站索引不同；整机使能仍须覆盖所有驱动器。
+            for (int id : {0, 2, 1}) {
+                rocos::Drive drive;
+                drive.id = id;
+                drive.inputs.status_word = "status";
+                drive.outputs.control_word = "control";
+                config.drives.push_back(drive);
+            }
+            bool ok = false;
+            {
+                rocos::Hardware hardware(config, bus.id);
+                hardware.SetJointBinding({1});
+                const auto start = std::chrono::steady_clock::now();
+                hardware.SetEnabled();
+                const auto elapsed = std::chrono::steady_clock::now() - start;
+                ok = hardware.GetJointState(1) == rocos::JntState::ENABLED &&
+                     hardware.GetJointState(2) == rocos::JntState::ENABLED &&
+                     hardware.GetJointState(0) ==
+                         (stalled ? rocos::JntState::DISABLED : rocos::JntState::ENABLED) &&
+                     elapsed < std::chrono::milliseconds(250);
+                if (!stalled) {
+                    // 重复使能也要完成状态确认。
+                    hardware.SetEnabled();
+                    ok = ok && hardware.GetJointState(0) == rocos::JntState::ENABLED;
+                }
+            }
+            rocos::EcatConfig::getInstance(bus.id)->disconnect();
+            _exit(ok ? 0 : 1);
+        } catch (const std::exception& error) {
+            std::cerr << error.what() << std::endl;
+            _exit(2);
+        }
+    }
+
+    const uint16_t commands[] = {0x06, 0x07, 0x0f};
+    const uint16_t states[] = {0x21, 0x23, 0x27};
+    int stage = 0;
+    int status = 0;
+    pid_t finished = 0;
+    // 只模拟 PDO 状态反馈，不连接真实 EtherCAT 主站或硬件。
+    while ((finished = waitpid(child, &status, WNOHANG)) == 0) {
+        if (stalled) {
+            for (int id : {1, 2}) {
+                const auto control = master.getSlaveOutputVarValue<uint16_t>(id, 0);
+                for (int i = 0; i < 3; ++i) {
+                    if (control == commands[i]) master.setSlaveInputVarValue(id, 0, states[i]);
+                }
+            }
+        } else if (stage < 3) {
+            bool allReady = true;
+            for (int id = 0; id < 3; ++id) {
+                allReady =
+                    allReady && master.getSlaveOutputVarValue<uint16_t>(id, 0) == commands[stage];
+            }
+            if (allReady) {
+                for (int id = 0; id < 3; ++id) master.setSlaveInputVarValue(id, 0, states[stage]);
+                ++stage;
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    REQUIRE(finished == child);
+    REQUIRE(WIFEXITED(status));
+    CHECK(WEXITSTATUS(status) == 0);
+    if (!stalled) CHECK(stage == 3);
 }
