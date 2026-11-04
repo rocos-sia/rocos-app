@@ -1,0 +1,146 @@
+<mujoco model="rcm">
+  <compiler angle="radian" meshdir="../meshes" autolimits="true" inertiafromgeom="false" />
+  <option timestep="0.001" integrator="implicitfast" gravity="0 0 -9.81" />
+  <default>
+    <default class="rcm">
+      <joint damping="10" armature="0.01" />
+      <geom type="mesh" mass="0" contype="2" conaffinity="7" group="2" rgba="1 1 1 1" />
+    </default>
+  </default>
+  <!-- Link_4 的凹形支架使用凸分解碰撞网格；来源与近似精度见 README。 -->
+  <include file="collision_meshes.xml" />
+  <asset>
+    <mesh name="base_link" file="base_link.STL" />
+    <mesh name="Link_1" file="Link_1.STL" />
+    <mesh name="Link_2" file="Link_2.STL" />
+    <mesh name="Link_3" file="Link_3.STL" />
+    <mesh name="Link_4" file="Link_4.STL" />
+    <mesh name="Link_5" file="Link_5.STL" />
+    <mesh name="Link_6" file="Link_6.STL" />
+    <mesh name="Link_7" file="Link_7.STL" />
+    <mesh name="Link_8" file="Link_8.STL" />
+  </asset>
+  <worldbody>
+    <body name="base_link" childclass="rcm">
+      <inertial pos="-0.208538867683211 0.0274384375230099 0.605785389444063" mass="612.273903945624" fullinertia="288.971719654994 358.838433653834 153.607691490131 7.24972697070602 75.32778325778099 -4.01560202160419" />
+      <geom name="base_link_mesh" mesh="base_link" pos="0 0 0" quat="1 0 0 0" rgba="1 1 1 1" />
+      <body name="Link_1" pos="0 0 0.02" quat="1 0 0 0">
+        <inertial pos="-0.20853886768317 0.0274384375230163 0.605785389444057" mass="612.273903945624" fullinertia="288.971719654994 358.838433653834 153.607691490131 7.2497269707054 75.3277832577815 -4.01560202160308" />
+        <joint name="joint_1" type="slide" axis="0 0 1" range="0.02 0.65" ref="0.02" />
+        <geom name="Link_1_mesh" mesh="Link_1" pos="0 0 0" quat="1 0 0 0" rgba="1 1 1 1" />
+        <body name="Link_2" pos="0.00100000000000433 0 1.522" quat="0.7071067811865499 0 0 -0.7071067811865451">
+          <inertial pos="-0.0274384375230211 -0.209538867683174 -0.916214610555942" mass="612.273903945624" fullinertia="358.838433653834 288.971719654994 153.607691490132 -7.24972697070579 4.01560202160351 75.3277832577816" />
+          <joint name="joint_2" type="hinge" axis="0 0 1" range="-1.3090 1.3090" />
+          <geom name="Link_2_mesh" mesh="Link_2" pos="0 0 0" quat="1 0 0 0" rgba="1 1 1 1" />
+          <body name="Link_3" pos="0 -1.066 -7.105427357601002e-17" quat="0.7071067811865462 0.7071067811865488 0 0">
+            <inertial pos="-0.0274384375230219 -0.916214610556027 -0.836461132316826" mass="612.273903945624" fullinertia="358.838433653834 153.607691490132 288.971719654994 4.01560202160352 7.24972697070579 -75.3277832577815" />
+            <joint name="joint_3" type="slide" axis="0 0 1" range="0.02 0.4" ref="0.02" />
+            <geom name="Link_3_mesh" mesh="Link_3" pos="0 0 0" quat="1 0 0 0" rgba="1 1 1 1" />
+            <body name="Link_4" pos="0 -0.672000000000081 0" quat="0.4999999999999982 0.5 0.5 -0.5000000000000018">
+              <inertial pos="0.836461132316825 -0.0274384375235069 0.244214610555947" mass="612.273903945624" fullinertia="288.971719654994 358.838433653834 153.607691490131 -7.2497269707058 -75.32778325778141 -4.01560202160356" />
+              <joint name="joint_4" type="hinge" axis="0 0 -1" range="-3.14159265358979 3.14159265358979" />
+              <geom name="Link_4_mesh" mesh="Link_4" pos="0 0 0" quat="1 0 0 0" rgba="0.341176470588235 1 0.588235294117647 1" contype="0" conaffinity="0" />
+              <body name="Link_5" pos="0.20784271247461 0 0" quat="0.6500003539295156 0.6500003539295179 0.2783873917610182 -0.2783873917610192">
+                <inertial pos="0.256983472369716 0.623507328507607 0.0274384375235568" mass="612.273903945624" fullinertia="293.296545486583 149.282865658542 358.838433653834 71.20495043451911 2.095801639634 8.018180356726379" />
+                <joint name="joint_5" type="hinge" axis="0 0 1" range="-1.7453 0.1745" />
+                <geom name="Link_5_mesh" mesh="Link_5" pos="0 0 0" quat="1 0 0 0" rgba="1 1 1 1" />
+                <body name="Link_6" pos="0.500000000000043 0 0" quat="0.1656298403470223 0 0 0.9861879922137664">
+                  <inertial pos="0.433373131484364 -0.509907982200386 0.0274384375226478" mass="612.273903945624" fullinertia="233.956501279107 208.622909866018 358.838433653834 100.472295919395 0.638601428637115 -8.262916492439119" />
+                  <joint name="joint_6" type="hinge" axis="0 0 -1" range="-1.7453 0.1745" />
+                  <geom name="Link_6_mesh" mesh="Link_6" pos="0 0 0" quat="1 0 0 0" rgba="1 1 1 1" />
+                  <body name="Link_7" pos="0.500000000000011 0 0" quat="0.8413344356982427 0 0 0.5405149094227832">
+                    <inertial pos="-0.4914611323169 -0.151364610598587 0.0274384375230263" mass="612.273903945624" fullinertia="288.971719654994 153.607691490131 358.838433653834 -75.32778325778141 -7.24972697070572 -4.01560202160339" />
+                    <joint name="joint_7" type="hinge" axis="0 0 -1" range="-0.1745 1.7453" />
+                    <geom name="Link_7_mesh" mesh="Link_7" pos="0 0 0" quat="1 0 0 0" rgba="1 1 1 1" />
+                    <body name="Link_8" pos="0.344999999999992 -0.361900000042643 0" quat="0.7071067811865462 0.7071067811865488 0 0">
+                      <inertial pos="-4.35186775504803e-10 1.09065111152454e-09 -0.5443811095496049" mass="23.3271598576465" fullinertia="0.845505575873524 0.845505766425281 0.229467487758015 -3.40639876155862e-11 -2.33674756599555e-09 3.11427643531458e-09" />
+                      <joint name="joint_8" type="hinge" axis="0 0 1" range="-3.14159265358979 3.14159265358979" />
+                      <geom name="Link_8_mesh" mesh="Link_8" pos="0 0 0" quat="1 0 0 0" rgba="1 1 1 1" />
+                      <body name="Link_9" pos="0 0 0" quat="1 0 0 0">
+                        <inertial pos="0 0 -0.032" mass="0.994" fullinertia="0.002 0.002 0.001 0 0 0" />
+                        <!-- URDF 的 arm7.STL 缺失：圆柱仅为末端占位几何，质量/惯量仍取 URDF。 -->
+                        <geom name="Link_9_placeholder" type="cylinder" pos="0 0 -0.032" size="0.03 0.032" rgba="0.45 0.45 0.45 1" />
+                      </body>
+                    </body>
+                  </body>
+                </body>
+              </body>
+              <!-- 碰撞块保持透明，避免启用全部 geom 分组的查看器与视觉网格叠加；alpha 不影响碰撞。 -->
+              <geom name="Link_4_collision_00" mesh="Link_4_collision_00" group="3" rgba="0.5 0.5 0.5 0" />
+              <geom name="Link_4_collision_01" mesh="Link_4_collision_01" group="3" rgba="0.5 0.5 0.5 0" />
+              <geom name="Link_4_collision_02" mesh="Link_4_collision_02" group="3" rgba="0.5 0.5 0.5 0" />
+              <geom name="Link_4_collision_03" mesh="Link_4_collision_03" group="3" rgba="0.5 0.5 0.5 0" />
+              <geom name="Link_4_collision_04" mesh="Link_4_collision_04" group="3" rgba="0.5 0.5 0.5 0" />
+              <geom name="Link_4_collision_05" mesh="Link_4_collision_05" group="3" rgba="0.5 0.5 0.5 0" />
+              <geom name="Link_4_collision_06" mesh="Link_4_collision_06" group="3" rgba="0.5 0.5 0.5 0" />
+              <geom name="Link_4_collision_07" mesh="Link_4_collision_07" group="3" rgba="0.5 0.5 0.5 0" />
+              <geom name="Link_4_collision_08" mesh="Link_4_collision_08" group="3" rgba="0.5 0.5 0.5 0" />
+              <geom name="Link_4_collision_09" mesh="Link_4_collision_09" group="3" rgba="0.5 0.5 0.5 0" />
+              <geom name="Link_4_collision_10" mesh="Link_4_collision_10" group="3" rgba="0.5 0.5 0.5 0" />
+              <geom name="Link_4_collision_11" mesh="Link_4_collision_11" group="3" rgba="0.5 0.5 0.5 0" />
+              <geom name="Link_4_collision_12" mesh="Link_4_collision_12" group="3" rgba="0.5 0.5 0.5 0" />
+              <geom name="Link_4_collision_13" mesh="Link_4_collision_13" group="3" rgba="0.5 0.5 0.5 0" />
+              <geom name="Link_4_collision_14" mesh="Link_4_collision_14" group="3" rgba="0.5 0.5 0.5 0" />
+              <geom name="Link_4_collision_15" mesh="Link_4_collision_15" group="3" rgba="0.5 0.5 0.5 0" />
+              <geom name="Link_4_collision_16" mesh="Link_4_collision_16" group="3" rgba="0.5 0.5 0.5 0" />
+              <geom name="Link_4_collision_17" mesh="Link_4_collision_17" group="3" rgba="0.5 0.5 0.5 0" />
+              <geom name="Link_4_collision_18" mesh="Link_4_collision_18" group="3" rgba="0.5 0.5 0.5 0" />
+              <geom name="Link_4_collision_19" mesh="Link_4_collision_19" group="3" rgba="0.5 0.5 0.5 0" />
+              <geom name="Link_4_collision_20" mesh="Link_4_collision_20" group="3" rgba="0.5 0.5 0.5 0" />
+              <geom name="Link_4_collision_21" mesh="Link_4_collision_21" group="3" rgba="0.5 0.5 0.5 0" />
+              <geom name="Link_4_collision_22" mesh="Link_4_collision_22" group="3" rgba="0.5 0.5 0.5 0" />
+              <geom name="Link_4_collision_23" mesh="Link_4_collision_23" group="3" rgba="0.5 0.5 0.5 0" />
+              <geom name="Link_4_collision_24" mesh="Link_4_collision_24" group="3" rgba="0.5 0.5 0.5 0" />
+              <geom name="Link_4_collision_25" mesh="Link_4_collision_25" group="3" rgba="0.5 0.5 0.5 0" />
+              <geom name="Link_4_collision_26" mesh="Link_4_collision_26" group="3" rgba="0.5 0.5 0.5 0" />
+              <geom name="Link_4_collision_27" mesh="Link_4_collision_27" group="3" rgba="0.5 0.5 0.5 0" />
+              <geom name="Link_4_collision_28" mesh="Link_4_collision_28" group="3" rgba="0.5 0.5 0.5 0" />
+              <geom name="Link_4_collision_29" mesh="Link_4_collision_29" group="3" rgba="0.5 0.5 0.5 0" />
+              <geom name="Link_4_collision_30" mesh="Link_4_collision_30" group="3" rgba="0.5 0.5 0.5 0" />
+              <geom name="Link_4_collision_31" mesh="Link_4_collision_31" group="3" rgba="0.5 0.5 0.5 0" />
+              <geom name="Link_4_collision_32" mesh="Link_4_collision_32" group="3" rgba="0.5 0.5 0.5 0" />
+              <geom name="Link_4_collision_33" mesh="Link_4_collision_33" group="3" rgba="0.5 0.5 0.5 0" />
+              <geom name="Link_4_collision_34" mesh="Link_4_collision_34" group="3" rgba="0.5 0.5 0.5 0" />
+              <geom name="Link_4_collision_35" mesh="Link_4_collision_35" group="3" rgba="0.5 0.5 0.5 0" />
+              <geom name="Link_4_collision_36" mesh="Link_4_collision_36" group="3" rgba="0.5 0.5 0.5 0" />
+              <geom name="Link_4_collision_37" mesh="Link_4_collision_37" group="3" rgba="0.5 0.5 0.5 0" />
+              <geom name="Link_4_collision_38" mesh="Link_4_collision_38" group="3" rgba="0.5 0.5 0.5 0" />
+              <geom name="Link_4_collision_39" mesh="Link_4_collision_39" group="3" rgba="0.5 0.5 0.5 0" />
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+  <contact>
+    <!-- 相邻装配件在关节处相互嵌套；仅排除相邻连杆碰撞。 -->
+    <exclude name="joint_1_assembly" body1="base_link" body2="Link_1" />
+    <exclude name="joint_2_assembly" body1="Link_1" body2="Link_2" />
+    <exclude name="joint_3_assembly" body1="Link_2" body2="Link_3" />
+    <exclude name="joint_4_assembly" body1="Link_3" body2="Link_4" />
+    <exclude name="joint_5_assembly" body1="Link_4" body2="Link_5" />
+    <exclude name="joint_6_assembly" body1="Link_5" body2="Link_6" />
+    <exclude name="joint_7_assembly" body1="Link_6" body2="Link_7" />
+    <exclude name="joint_8_assembly" body1="Link_7" body2="Link_8" />
+    <exclude name="joint_9_assembly" body1="Link_8" body2="Link_9" />
+  </contact>
+  <equality>
+    <joint name="joint_6_mimic" joint1="joint_6" joint2="joint_5" polycoef="0 1 0 0 0" solref="0.002 1" solimp="0.9999 0.9999 0.001" />
+    <joint name="joint_7_mimic" joint1="joint_7" joint2="joint_5" polycoef="0 -1 0 0 0" solref="0.002 1" solimp="0.9999 0.9999 0.001" />
+  </equality>
+  <!-- 仿真伺服增益按当前 URDF 的大惯量配置，不代表硬件实测增益。 -->
+  <actuator>
+    <!-- 顺序与 hardware.yaml 的 8 个驱动一致；mimic 槽位零增益，由 equality 被动联动。 -->
+    <position name="actuator_1" joint="joint_1" kp="30000000" kv="300000" ctrlrange="0.02 0.65" />
+    <position name="actuator_2" joint="joint_2" kp="2000000" kv="40000" ctrlrange="-1.3090 1.3090" />
+    <position name="actuator_3" joint="joint_3" kp="30000000" kv="300000" ctrlrange="0.02 0.4" />
+    <position name="actuator_4" joint="joint_4" kp="2000000" kv="40000" ctrlrange="-3.14159265358979 3.14159265358979" />
+    <position name="actuator_5" joint="joint_5" kp="2000000" kv="40000" ctrlrange="-1.7453 0.1745" />
+    <position name="actuator_6" joint="joint_6" kp="0" kv="0" ctrlrange="-1.7453 0.1745" />
+    <position name="actuator_7" joint="joint_7" kp="0" kv="0" ctrlrange="-0.1745 1.7453" />
+    <position name="actuator_8" joint="joint_8" kp="2000000" kv="40000" ctrlrange="-3.14159265358979 3.14159265358979" />
+  </actuator>
+  <keyframe>
+    <key name="home" qpos="0.02 0 0.02 0 0 0 0 0" ctrl="0.02 0 0.02 0 0 0 0 0" />
+  </keyframe>
+</mujoco>
