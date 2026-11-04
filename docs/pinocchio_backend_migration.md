@@ -31,7 +31,13 @@ URDF 是共同的机器人描述格式，没有新增“Pinocchio URDF”格式�
 - 模型位置、速度、力矩限制只读取标准 URDF joint limit，`<hardware><limit>` 不再覆盖它们。硬件 YAML 的驱动保护参数仍由原硬件层管理；本次没有重新定义硬件保护与轨迹参数。acc/jerk 不属于标准 URDF joint limit。
 - FK/动力学可以计算限位外状态；IK 必须返回限位内解。pin_ik 成功后还检查维度、有限数值、每个关节限位，以及独立 FK 的位置和姿态残差（各不超过 `2e-5 m` / `2e-5 rad`）。失败不覆盖调用者输出。
 
-支持固定基座串联链中的 revolute、continuous、prismatic 和 fixed 关节，允许 base 不是 URDF 根节点，且 base 必须是 tip 的祖先。不支持 mimic、floating、planar 或跨分支运动链。base 之外的固定安装姿态不计入链内 FK，重力向量需在所选 base 系表达；链内固定连杆惯量仍参与动力学。
+支持固定基座链中的 revolute、continuous、prismatic、fixed 和标量 mimic 关系，允许 base 不是 URDF 根节点，且 base 必须是 tip 的祖先。不支持 floating、planar 或非祖先 base→tip 请求。base 之外的固定安装姿态不计入链内 FK，重力向量需在所选 base 系表达；链内固定连杆惯量仍参与动力学。
+
+`Model` 接收硬件 `joint_name` 列表。有驱动 mimic 保留对外向量槽位，无驱动 mimic 不占槽位；非 mimic 关节仍须完整绑定。主链以外有驱动 mimic 的祖先路径以及所依赖的源关节路径也纳入模型，追加在主链关节/连杆顺序之后，其余旁支只用于 URDF 显示。对应的 `Wrenches` 在主链子连杆后追加这些路径上首次出现的子连杆。
+
+模型按理想联动约束计算：内部以 `q_full = A * q_independent + b` 展开所有关节，输入向量中的 mimic 位置、速度、加速度槽位由源关节决定。原始驱动反馈仍按实际值返回状态。Jacobian 将 mimic 的运动贡献合并到源关节列，mimic 槽位列为零。各关节位置和速度限制按倍率折算并与源关节限制取交集。IK 在独立坐标内做带限位、阻尼和回溯的迭代求解，使用独立工作区、5 ms 搜索预算，成功后仍做 FK 残差检查；无 mimic 时保留原 pin_ik 路径。
+
+耦合动力学使用 `M_independent = Aᵀ M_full A`，保留被动 mimic 的惯量与外力。若实际驱动向量的联动映射为 `B`，输入力矩按虚功映射 `Bᵀ tau_active` 汇总；逆动力学使用 `B (Bᵀ B)⁻¹` 将独立坐标力矩以最小范数分配给实际驱动槽位，恒定位置（倍率为零）的槽位得到零广义力矩。这是理想约束下的一种力矩分配，不是驱动器负载均衡策略；位置联动并不额外实现力矩模式的同步伺服。
 
 ## 并发和实时边界
 

@@ -7,6 +7,7 @@
 #include <yaml-cpp/yaml.h>
 
 #include <chrono>
+#include <cmath>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -457,6 +458,15 @@ double Hardware::GetJointLoadTorque(int32_t id) {
 }
 
 void Hardware::SetJointPosition(int32_t id, double pos) {
+    for (const auto& mimic : mimic_drives_)
+        if (mimic.id == id) return;
+    writeJointPosition(id, pos);
+    for (const auto& mimic : mimic_drives_)
+        if (mimic.source_id == id)
+            writeJointPosition(mimic.id, mimic.multiplier * pos + mimic.offset);
+}
+
+void Hardware::writeJointPosition(int32_t id, double pos) {
     auto idx = getDriveIdx(id);
     if (idx < 0) return;
     const auto& cache = drive_pdo_cache_[static_cast<size_t>(idx)];
@@ -767,6 +777,39 @@ Result Hardware::SetJointBinding(const std::vector<int32_t>& model_index_to_driv
     model_index_to_drive_id_ = model_index_to_drive_id;
     log_ptr->info("SetJointBinding success: model_index_to_drive_id=[{}]",
                   formatDriveIdList(model_index_to_drive_id_));
+    return Result::NoError;
+}
+
+void Hardware::ConfigureMimicJoints(const std::vector<MimicJoint>& joints) {
+    std::vector<MimicDrive> next;
+    for (const auto& mimic : joints) {
+        const auto target = drive_name_to_index_.find(mimic.name);
+        if (target == drive_name_to_index_.end()) continue;
+        const auto source = drive_name_to_index_.find(mimic.source);
+        if (source == drive_name_to_index_.end())
+            throw std::invalid_argument("Mimic source has no hardware mapping: " + mimic.source);
+        if (target == source || !std::isfinite(mimic.multiplier) || !std::isfinite(mimic.offset))
+            throw std::invalid_argument("Invalid mimic hardware mapping: " + mimic.name);
+        next.push_back({config_.drives[target->second].id, config_.drives[source->second].id,
+                        mimic.multiplier, mimic.offset});
+    }
+    mimic_drives_ = std::move(next);
+}
+
+Result Hardware::ApplyPositionCoupling(JntArray& q) const {
+    if (mimic_drives_.empty()) return Result::NoError;
+    if (q.rows() != ModelJointCount()) return Result::UnmatchedJointsNumber;
+    for (const auto& mimic : mimic_drives_) {
+        size_t source = ModelJointCount(), target = ModelJointCount();
+        for (size_t i = 0; i < ModelJointCount(); ++i) {
+            if (DriveIdByModelIndex(i) == mimic.source_id) source = i;
+            if (DriveIdByModelIndex(i) == mimic.id) target = i;
+        }
+        if (source == ModelJointCount() || target == ModelJointCount())
+            return Result::UnmatchedJointsNumber;
+        q(target) = mimic.multiplier * q(source) + mimic.offset;
+        if (!std::isfinite(q(target))) return Result::ParameterNanOrInf;
+    }
     return Result::NoError;
 }
 

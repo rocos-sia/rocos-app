@@ -218,6 +218,42 @@ TEST_CASE("PositionController - Reset") {
     CHECK(ctrl.Reset() == true);
 }
 
+TEST_CASE(
+    "PositionController validates the coupled position and velocity before "
+    "writing") {
+    class CoupledHardware : public FakeHardware {
+    public:
+        rocos::Result ApplyPositionCoupling(rocos::JntArray& q) const override {
+            if (q.rows() != 2) return rocos::Result::UnmatchedJointsNumber;
+            q(1) = 2 * q(0) + 0.1;
+            return rocos::Result::NoError;
+        }
+    } hardware;
+    hardware.fake_position_.resize(2);
+    FakeModel model;
+    model.SetLimits(2, -1, 1, 2);
+    rocos::PositionController controller;
+    REQUIRE(controller.SetHardware(&hardware) == rocos::Result::NoError);
+    REQUIRE(controller.SetModel(&model) == rocos::Result::NoError);
+    rocos::JntArray q(2);
+    q.data << 0.1, 999;
+    hardware.fake_position_.data << 0.1, 0;
+    CHECK(controller.UpdateCmd(q) == rocos::Result::SpeedLimit);
+    CHECK(hardware.set_position_count_ == 0);
+    hardware.fake_position_(1) = 0.3;
+    REQUIRE(controller.UpdateCmd(q) == rocos::Result::NoError);
+    CHECK(hardware.last_set_position_(1) == doctest::Approx(0.3));
+    q(0) = 0.1005;
+    REQUIRE(controller.UpdateCmd(q) == rocos::Result::NoError);
+    CHECK(hardware.last_set_position_(1) == doctest::Approx(0.301));
+    q(0) = 0.102;
+    CHECK(controller.UpdateCmd(q) == rocos::Result::SpeedLimit);
+    controller.Reset();
+    q(0) = 0.8;
+    CHECK(controller.UpdateCmd(q) == rocos::Result::PosLimit);
+    CHECK(hardware.set_position_count_ == 2);
+}
+
 TEST_CASE("PositionController - SetReady routes through UpdateCmd") {
     FakeHardware hw;
     FakeModel model;

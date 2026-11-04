@@ -125,11 +125,14 @@ Result PositionController::GenerateCmd(const Reference& ref_in, JntArray& q_cmd)
     return Result::MoveUnknown;
 }
 
-Result PositionController::UpdateCmd(const JntArray& q_cmd) {
+Result PositionController::UpdateCmd(const JntArray& input) {
     if (hardware_ == nullptr) {
         return Result::ParameterPointerEqualsNullptr;
     }
 
+    JntArray q_cmd = input;
+    const auto coupled = hardware_->ApplyPositionCoupling(q_cmd);
+    if (coupled != Result::NoError) return coupled;
     const Result valid = ValidatePositionCommand(q_cmd);
     if (valid != Result::NoError) {
         return valid;
@@ -162,6 +165,13 @@ Result PositionController::ValidatePositionCommand(const JntArray& q_cmd) {
     const double dt = static_cast<double>(hardware_->GetDt()) / 1'000'000.0;
     const auto* previous = has_last_cmd_ && q_last_cmd_.rows() == q_cmd.rows()
         ? &q_last_cmd_ : nullptr;
+    if (!previous) {
+        auto coupled_actual = q_actual;
+        const auto rc = hardware_->ApplyPositionCoupling(coupled_actual);
+        if (rc != Result::NoError) return rc;
+        // 初始反馈不满足联动时，也不能跳过首次指令的速度检查。
+        if (!coupled_actual.data.isApprox(q_actual.data, 1e-9)) previous = &q_actual;
+    }
     JointCommandViolation violation;
     const auto result = ValidateJointCommand(*model_, q_cmd, previous, dt, &violation);
     if (result == Result::PosLimit || result == Result::SpeedLimit) {

@@ -21,6 +21,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 
 #include "src/model.hpp"
+#include "src/motion_preview.hpp"
 
 #include <test/doctest.h>
 #include <unistd.h>
@@ -93,6 +94,227 @@ TEST_CASE("Model uses standard URDF limits and preserves fixed tip dynamics") {
     REQUIRE(model.InverseDynamics(q, zero, desired_acceleration, {}, tau) ==
             rocos::Result::NoError);
     CHECK(tau(0) == doctest::Approx(1.4));  // Iyy + m * com_x^2 = 0.7
+}
+
+TEST_CASE("Model resolves display mimic chains and rejects invalid references") {
+    std::string xml(pendulum);
+    const auto end = xml.find("</robot>");
+    xml.insert(end, R"(
+      <link name="finger_a"/><link name="finger_b"/>
+      <joint name="follower_a" type="revolute">
+        <parent link="arm"/><child link="finger_a"/>
+        <limit lower="-3" upper="3" velocity="4" effort="10"/>
+        <mimic joint="hinge" multiplier="-2" offset="0.5"/>
+      </joint>
+      <joint name="follower_b" type="revolute">
+        <parent link="finger_a"/><child link="finger_b"/>
+        <limit lower="-3" upper="3" velocity="4" effort="10"/>
+        <mimic joint="follower_a" multiplier="0.5" offset="0.1"/>
+      </joint>)");
+    SUBCASE("Passive branches preserve the arm degrees of freedom") {
+        ModelFile file(xml);
+        rocos::Model model(file.path.string(), "base", "tip");
+        CHECK(model.GetJointNum() == 1);
+        const auto& mimics = model.GetMimicJoints();
+        REQUIRE(mimics.size() == 2);
+        CHECK(mimics[1].name == "follower_b");
+        CHECK(mimics[1].source == "hinge");
+        CHECK(mimics[1].multiplier == doctest::Approx(-1));
+        CHECK(mimics[1].offset == doctest::Approx(0.35));
+        CHECK(model.CloneForPreview()->GetMimicJoints().size() == 2);
+    }
+    SUBCASE("Missing source") {
+        xml.replace(xml.find("mimic joint=\"hinge\""), 19, "mimic joint=\"absent\"");
+        ModelFile file(xml);
+        CHECK_THROWS(rocos::Model(file.path.string(), "base", "tip"));
+    }
+    SUBCASE("A driven descendant can follow through an unactuated mimic") {
+        ModelFile file(xml);
+        rocos::Model model(file.path.string(), "base", "tip", {"hinge", "follower_b"});
+        CHECK(model.GetJointNames() == std::vector<std::string>{"hinge", "follower_b"});
+        rocos::JntArray q(2);
+        q.data << 0.2, 100;
+        REQUIRE(model.ApplyPositionCoupling(q) == rocos::Result::NoError);
+        CHECK(q(1) == doctest::Approx(0.15));
+        rocos::Frame pose;
+        REQUIRE(model.ForwardKinematics(q, pose) == rocos::Result::NoError);
+        CHECK(pose.p.x() == doctest::Approx(std::cos(0.2)));
+    }
+    SUBCASE("Dependency cycle across branches") {
+        xml.replace(xml.find("mimic joint=\"hinge\""), 19, "mimic joint=\"follower_b\"");
+        ModelFile file(xml);
+        CHECK_THROWS(rocos::Model(file.path.string(), "base", "tip"));
+    }
+}
+
+TEST_CASE("Main-chain mimic has consistent FK, IK, limits and constrained dynamics") {
+    const char* xml = R"(<robot name="coupled_slides">
+      <link name="base"/>
+      <link name="first"><inertial><mass value="2"/>
+        <inertia ixx="1" ixy="0" ixz="0" iyy="1" iyz="0" izz="1"/>
+      </inertial></link>
+      <link name="second"><inertial><mass value="3"/>
+        <inertia ixx="1" ixy="0" ixz="0" iyy="1" iyz="0" izz="1"/>
+      </inertial></link>
+      <link name="tip"/>
+      <joint name="source" type="prismatic"><parent link="base"/><child link="first"/>
+        <axis xyz="1 0 0"/><limit lower="-1" upper="1" velocity="2" effort="100"/>
+      </joint>
+      <joint name="follower" type="prismatic"><parent link="first"/><child link="second"/>
+        <axis xyz="1 0 0"/><limit lower="-0.1" upper="0.4" velocity="0.4" effort="100"/>
+        <mimic joint="source" multiplier="-0.5" offset="0.2"/>
+      </joint>
+      <joint name="fixed_tip" type="fixed"><parent link="second"/><child link="tip"/>
+        <origin xyz="1 0 0"/>
+      </joint>
+    </robot>)";
+    bool driven = false;
+    SUBCASE("Passive mimic has no command slot") {}
+    SUBCASE("Driven mimic retains a dependent command slot") { driven = true; }
+    ModelFile file(xml);
+    rocos::Model model(file.path.string(), "base", "tip",
+                       driven ? std::vector<std::string>{"source", "follower"}
+                              : std::vector<std::string>{"source"});
+    const int n = driven ? 2 : 1;
+    REQUIRE(model.GetJointNum() == n);
+    CHECK(model.GetPosLowerLimit()(0) == doctest::Approx(-0.4));
+    CHECK(model.GetPosUpperLimit()(0) == doctest::Approx(0.6));
+    CHECK(model.GetVelocityLimit()(0) == doctest::Approx(0.8));
+    rocos::JntArray q(n), zero(n), a(n), tau, result;
+    q(0) = 0.4;
+    a(0) = 2;
+    if (driven) {
+        q(1) = 999;
+        a(1) = 77;
+    }
+    rocos::Frame pose;
+    REQUIRE(model.ForwardKinematics(q, pose) == rocos::Result::NoError);
+    CHECK(pose.p.x() == doctest::Approx(1.4));
+    rocos::Jacobian jac;
+    REQUIRE(model.GetJacobian(q, jac) == rocos::Result::NoError);
+    CHECK(jac(0, 0) == doctest::Approx(0.5));
+    if (driven) CHECK(jac.data.col(1).norm() == 0);
+    auto plus = q, minus = q;
+    plus(0) += 1e-6;
+    minus(0) -= 1e-6;
+    rocos::Frame p, m;
+    REQUIRE(model.ForwardKinematics(plus, p) == rocos::Result::NoError);
+    REQUIRE(model.ForwardKinematics(minus, m) == rocos::Result::NoError);
+    CHECK((p.p.x() - m.p.x()) / 2e-6 == doctest::Approx(jac(0, 0)));
+    REQUIRE(model.ApplyPositionCoupling(q) == rocos::Result::NoError);
+    if (driven) CHECK(q(1) == doctest::Approx(0));
+
+    rocos::JntArray seed(n), solution;
+    seed(0) = -0.2;
+    REQUIRE(model.InverseKinematics(seed, pose, solution) == rocos::Result::NoError);
+    CHECK(solution(0) == doctest::Approx(q(0)).epsilon(1e-4));
+    if (driven) CHECK(solution(1) == doctest::Approx(-0.5 * solution(0) + 0.2));
+    rocos::Frame unreachable = pose;
+    unreachable.p.x(2);
+    const auto previous_solution = solution;
+    CHECK(model.InverseKinematics(seed, unreachable, solution) == rocos::Result::IkCalcFail);
+    CHECK(solution.data.isApprox(previous_solution.data));
+
+    model.SetGravity(rocos::Vector::Zero());
+    REQUIRE(model.InverseDynamics(q, zero, a, {}, tau) == rocos::Result::NoError);
+    // 两段质量的速度分别为 q_dot 和 0.5*q_dot，有效质量 2 + 3*0.5^2。
+    CHECK(tau(0) == doctest::Approx(driven ? 4.4 : 5.5));
+    if (driven) CHECK(tau(1) == doctest::Approx(-2.2));
+    REQUIRE(model.ForwardDynamics(q, zero, tau, {}, result) == rocos::Result::NoError);
+    CHECK(result(0) == doctest::Approx(2));
+    if (driven) CHECK(result(1) == doctest::Approx(-1));
+    rocos::Wrenches forces(3);
+    forces[2].force.x(4);
+    REQUIRE(model.InverseDynamics(q, zero, a, forces, tau) == rocos::Result::NoError);
+    CHECK(tau(0) == doctest::Approx(driven ? 2.8 : 3.5));
+    REQUIRE(model.ForwardDynamics(q, zero, tau, forces, result) == rocos::Result::NoError);
+    CHECK(result(0) == doctest::Approx(2));
+    auto clone = model.CloneForPreview();
+    REQUIRE(clone->InverseKinematics(seed, pose, solution) == rocos::Result::NoError);
+    CHECK(solution(0) == doctest::Approx(q(0)).epsilon(1e-4));
+    rocos::MotionPreviewRequest preview;
+    preview.motion_type = "MoveJ";
+    preview.start_joints.resize(n);
+    preview.joints = q;
+    if (driven) preview.joints(1) = 999;
+    preview.velocity = 0.1;
+    rocos::MotionPreviewResult output;
+    REQUIRE(rocos::GenerateMotionPreview(*clone, preview, 0.01, output) == rocos::Result::NoError);
+    REQUIRE(!output.points.empty());
+    for (const auto& point : output.points) {
+        CHECK(point.flange.p.x() == doctest::Approx(1.2 + 0.5 * point.positions(0)));
+        if (driven) CHECK(point.positions(1) == doctest::Approx(-0.5 * point.positions(0) + 0.2));
+    }
+    auto lower = model.GetPosLowerLimit(), upper = model.GetPosUpperLimit();
+    upper(0) = 0.1;
+    model.SetPosLimits(lower, upper);
+    model.UpdateSolvers();
+    CHECK(model.InverseKinematics(seed, pose, solution) == rocos::Result::IkCalcFail);
+}
+
+TEST_CASE("Revolute mimic on Talon preserves constrained Jacobian and IK poses") {
+    std::ifstream input("config/robots/talon/robot.urdf");
+    std::string xml((std::istreambuf_iterator<char>(input)), {});
+    const auto joint = xml.find("<joint name=\"joint_2\"");
+    REQUIRE(joint != std::string::npos);
+    xml.insert(xml.find('>', joint) + 1,
+               "<mimic joint=\"joint_1\" multiplier=\"-0.7\" offset=\"0.1\"/>");
+    ModelFile file(xml);
+    bool driven = false;
+    SUBCASE("Passive") {}
+    SUBCASE("Driven") { driven = true; }
+    rocos::Model model(file.path.string(), "base_link", "link_7",
+                       driven ? std::vector<std::string>{"joint_2"} : std::vector<std::string>{});
+    const int n = model.GetJointNum();
+    rocos::JntArray q(n), seed(n), solution;
+    for (int i = 0; i < n; ++i) q(i) = 0.15 * std::sin(i + 0.5);
+    REQUIRE(model.ApplyPositionCoupling(q) == rocos::Result::NoError);
+    seed = q;
+    seed(0) -= 0.03;
+    rocos::Frame target, actual;
+    REQUIRE(model.ForwardKinematics(q, target) == rocos::Result::NoError);
+    REQUIRE(model.InverseKinematics(seed, target, solution) == rocos::Result::NoError);
+    REQUIRE(model.ForwardKinematics(solution, actual) == rocos::Result::NoError);
+    CHECK((actual.p - target.p).Norm() < 2e-5);
+    CHECK((actual.M.Inverse() * target.M).GetRot().Norm() < 2e-5);
+    if (driven) CHECK(solution(1) == doctest::Approx(-0.7 * solution(0) + 0.1));
+    rocos::Jacobian jac;
+    REQUIRE(model.GetJacobian(q, jac) == rocos::Result::NoError);
+    for (int i = 0; i < n; ++i) {
+        auto plus = q, minus = q;
+        plus(i) += 1e-6;
+        minus(i) -= 1e-6;
+        rocos::Frame a, b;
+        REQUIRE(model.ForwardKinematics(minus, a) == rocos::Result::NoError);
+        REQUIRE(model.ForwardKinematics(plus, b) == rocos::Result::NoError);
+        const auto derivative = rocos::diff(a, b, 2e-6);
+        for (int r = 0; r < 6; ++r)
+            CHECK(jac(r, i) == doctest::Approx(derivative(r)).epsilon(1e-6));
+    }
+    rocos::Model full_model("config/robots/talon/robot.urdf", "base_link", "link_7");
+    rocos::JntArray full_q(7), full_v(7), full_a(7), v(n), acceleration(n), tau, full_tau, computed;
+    const auto names = model.GetJointNames();
+    for (int i = 0; i < n; ++i) {
+        const int index = std::stoi(names[i].substr(6)) - 1;
+        full_q(index) = q(i);
+        full_v(index) = v(i) = 0.03 * std::sin(i + 1);
+        full_a(index) = acceleration(i) = 0.1 * std::cos(i + 1);
+    }
+    full_q(1) = -0.7 * full_q(0) + 0.1;
+    full_v(1) = -0.7 * full_v(0);
+    full_a(1) = -0.7 * full_a(0);
+    REQUIRE(full_model.InverseDynamics(full_q, full_v, full_a, {}, full_tau) ==
+            rocos::Result::NoError);
+    REQUIRE(model.InverseDynamics(q, v, acceleration, {}, tau) == rocos::Result::NoError);
+    CHECK(tau(0) - (driven ? 0.7 * tau(1) : 0) ==
+          doctest::Approx(full_tau(0) - 0.7 * full_tau(1)).epsilon(1e-9));
+    for (int i = driven ? 2 : 1; i < n; ++i) {
+        const int index = std::stoi(names[i].substr(6)) - 1;
+        CHECK(tau(i) == doctest::Approx(full_tau(index)).epsilon(1e-9));
+    }
+    REQUIRE(model.ForwardDynamics(q, v, tau, {}, computed) == rocos::Result::NoError);
+    if (driven) acceleration(1) = -0.7 * acceleration(0);
+    CHECK(computed.data.isApprox(acceleration.data, 1e-8));
 }
 
 TEST_CASE(

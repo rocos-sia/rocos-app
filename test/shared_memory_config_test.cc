@@ -227,3 +227,45 @@ TEST_CASE("Hardware enables all drive state machines together") {
     CHECK(WEXITSTATUS(status) == 0);
     if (!stalled) CHECK(stage == 3);
 }
+
+TEST_CASE("Hardware mimic position commands follow source commands in user units") {
+    BusFixture bus(3);
+    REQUIRE(bus.master.notifyClients());
+    rocos::HardwareConfig config;
+    // 源在最后，且映射顺序不同；不能依赖向量或硬件的排列顺序。
+    for (int id : {2, 0, 1}) {
+        rocos::Drive drive;
+        drive.id = id;
+        drive.joint_name = "joint_" + std::to_string(id);
+        drive.inputs.position_actual_value = "position";
+        drive.outputs.target_position = "target";
+        drive.transform.cnt_per_unit = 1000;
+        config.drives.push_back(drive);
+    }
+    {
+        rocos::Hardware hardware(config, bus.id);
+        REQUIRE(hardware.SetJointBinding({2, 1, 0}) == rocos::Result::NoError);
+        hardware.ConfigureMimicJoints({{"joint_2", "joint_0", -2, 0.5},
+                                       {"joint_1", "joint_0", 0, 0.25},
+                                       {"display_only", "joint_0", 3, 0}});
+        rocos::JntArray command(3);
+        command.data << 99, 88, 0.125;
+        auto coupled = command;
+        REQUIRE(hardware.ApplyPositionCoupling(coupled) == rocos::Result::NoError);
+        CHECK(coupled(0) == doctest::Approx(0.25));
+        CHECK(coupled(1) == doctest::Approx(0.25));
+        hardware.SetPosition(command);
+        CHECK(bus.master.getSlaveOutputVarValue<int32_t>(0, 1) == 125);
+        CHECK(bus.master.getSlaveOutputVarValue<int32_t>(2, 1) == 250);
+        CHECK(bus.master.getSlaveOutputVarValue<int32_t>(1, 1) == 250);
+        hardware.SetJointPosition(2, 12);
+        CHECK(bus.master.getSlaveOutputVarValue<int32_t>(2, 1) == 250);
+        hardware.SetJointPosition(0, -0.25);
+        CHECK(bus.master.getSlaveOutputVarValue<int32_t>(2, 1) == 1000);
+        CHECK(bus.master.getSlaveOutputVarValue<int32_t>(1, 1) == 250);
+        CHECK_THROWS(hardware.ConfigureMimicJoints({{"joint_2", "missing", 1, 0}}));
+        hardware.SetJointPosition(2, 12);
+        CHECK(bus.master.getSlaveOutputVarValue<int32_t>(2, 1) == 1000);
+    }
+    rocos::EcatConfig::getInstance(bus.id)->disconnect();
+}

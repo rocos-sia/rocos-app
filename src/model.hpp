@@ -21,6 +21,7 @@
 #include <memory>
 
 #include "logger.hpp"
+#include "mimic_joint.hpp"
 #include "model_interface.hpp"
 
 namespace rocos {
@@ -28,8 +29,8 @@ namespace rocos {
 class Model : public ModelInterface {
  public:
   explicit Model(const std::string& urdf_file_path,
-                 const std::string& base_link,
-                 const std::string& tip);
+                 const std::string& base_link, const std::string& tip,
+                 const std::vector<std::string>& driven_joint_names = {});
 
   ~Model() override;
 
@@ -50,6 +51,10 @@ class Model : public ModelInterface {
 
   int GetJointNum() const override;
   std::vector<std::string> GetJointNames() const override;
+  Result ApplyPositionCoupling(JntArray& q) const override;
+  const std::vector<MimicJoint>& GetMimicJoints() const {
+    return mimic_joints_;
+  }
 
   void SetGravity(const Vector& gravity);
 
@@ -61,7 +66,8 @@ class Model : public ModelInterface {
   // 不允许与求解或限位读取并发；失败时保留原模型。
   bool ParseUrdf(const std::string& urdf_string,
                  const std::string& base_link,
-                 const std::string& tip);
+                 const std::string& tip,
+                 const std::vector<std::string>& driven_joint_names = {});
 
   const JntArray& GetPosLowerLimit() const override { return q_min_; }
   const JntArray& GetPosUpperLimit() const override { return q_max_; }
@@ -74,6 +80,7 @@ class Model : public ModelInterface {
   std::unique_ptr<Impl> impl_;
 
   std::vector<std::string> joint_names_;  // 模型链中可动关节名称，顺序与 JntArray 一致
+  std::vector<MimicJoint> mimic_joints_;
 
   std::string urdf_string_;
 

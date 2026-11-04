@@ -623,12 +623,22 @@ namespace rocos {
         joint_binding_path_ = config.joint_binding;
         load_params_path_ = config.payload;
         urdf_path_ = config.urdf;
-        model = std::make_unique<Model>(config.urdf, config.base_link, config.tip_link);
+        const auto hardware_config = config.hardware
+                                         ? *config.hardware
+                                         : Hardware::LoadConfigFromYAML(config.hardware_config);
+        std::vector<std::string> driven_joint_names;
+        for (const auto& drive : hardware_config.drives)
+            driven_joint_names.push_back(drive.joint_name);
+        auto robot_model = std::make_unique<Model>(config.urdf, config.base_link, config.tip_link,
+                                                   driven_joint_names);
+        const auto mimics = robot_model->GetMimicJoints();
+        model = std::move(robot_model);
         if (config.composed_configuration && config.master_state != "op") {
             throw std::runtime_error("Robot control requires master.state=op; other states are master maintenance modes");
         }
-        hardware = config.hardware ? std::make_unique<Hardware>(*config.hardware, config.ecat_id)
-                                   : std::make_unique<Hardware>(config.hardware_config, config.ecat_id);
+        auto robot_hardware = std::make_unique<Hardware>(hardware_config, config.ecat_id);
+        robot_hardware->ConfigureMimicJoints(mimics);
+        hardware = std::move(robot_hardware);
         if (config.master_cycle_us > 0 && hardware->GetDt() != static_cast<uint32_t>(config.master_cycle_us)) {
             throw std::runtime_error("Running master cycle differs from robot.master.cycle; apply the exported master configuration first");
         }
@@ -1236,11 +1246,17 @@ namespace rocos {
     Result Robot::MoveJ(const JntArray &q_goal,
                         double v_limit, double a_limit, double j_limit) {
         auto command_lock = LockToolState();
+        JntArray coupled_goal = q_goal;
+        const auto coupling = model->ApplyPositionCoupling(coupled_goal);
+        if (coupling != Result::NoError) return coupling;
 
-        data_ready_callback_ = [this, q_goal, v_limit, a_limit, j_limit]() -> Result {
+        data_ready_callback_ = [this, q_goal = coupled_goal, v_limit, a_limit,
+                                j_limit]() -> Result {
             const int n = getJointNum();
             JntArray q_start(static_cast<unsigned int>(n));
             for (int i = 0; i < n; ++i) q_start(i) = getJointPosition(i);
+            const auto coupling = model->ApplyPositionCoupling(q_start);
+            if (coupling != Result::NoError) return coupling;
 
             auto new_motion = std::make_unique<MoveJoint>(
                 q_start, q_goal, v_limit, a_limit, j_limit, dt_);

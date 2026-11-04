@@ -343,7 +343,9 @@ class Robot {
   }
 
   inline std::string getJointName(int id) const {
-    return hardware ? hardware->getJointName(id) : "";
+    if (!model || id < 0) return "";
+    const auto names = model->GetJointNames();
+    return static_cast<size_t>(id) < names.size() ? names[id] : "";
   }
 
   inline int getJointStatus(int id) const { return 0; }

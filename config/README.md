@@ -31,6 +31,8 @@ config/
 
 Talon 七个活动关节使用 URDF `revolute` 类型，模型位置、速度、力矩限制以标准 `<joint><limit lower="…" upper="…" velocity="…" effort="…"/>` 为准；URDF 中已移除 `<hardware>` 扩展块，驱动器、PDO、换算参数及 acc/jerk 等硬件配置统一放在 `robots/talon/hardware.yaml`，由硬件层读取。详见[后端迁移说明](../docs/pinocchio_backend_migration.md)。
 
+URDF 的 `<mimic joint="source" multiplier="-1" offset="0.1"/>` 按 `q = multiplier * q_source + offset` 联动。是否有主动驱动只由硬件配置中的 `joint_name` 决定：有映射的 mimic 保留关节状态和指令槽位，但位置指令会被源关节计算值覆盖，不能单独写入；无映射的 mimic 不占驱动槽位、不要求绑定，前端利用原始 URDF 更新显示。主运动链中的无驱动 mimic 仍参与 FK/IK 和动力学，不会被当作固定关节忽略。支持多级引用，循环引用、缺失源关节和不可满足的联动限位会拒绝加载。驱动源必须有硬件映射；新增有驱动 mimic 不需要另设 YAML 联动参数。
+
 ```bash
 cmake --build --preset release --parallel 2
 # 不连接硬件、不启动 HTTP；检查配置、模型和绑定

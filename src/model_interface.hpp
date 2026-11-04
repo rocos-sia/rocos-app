@@ -50,6 +50,11 @@ class ModelInterface {
   /// @brief 获取 URDF 运动链 中可动关节的名称列表，顺序与 ROCOS 关节向量 一致
   virtual std::vector<std::string> GetJointNames() const = 0;
 
+  // 保留有驱动 mimic 的槽位，但位置由源关节唯一确定。
+  virtual Result ApplyPositionCoupling(JntArray& /*q*/) const {
+    return Result::NoError;
+  }
+
   virtual const JntArray& GetPosLowerLimit() const {
     static const JntArray empty;
     return empty;

@@ -30,6 +30,7 @@
 
 #include "ecat_type.hpp"
 #include "hardware_interface.hpp"
+#include "mimic_joint.hpp"
 #include "pdo_entry.hpp"
 
 // 前向声明，避免在头文件中引入 yaml-cpp
@@ -210,6 +211,10 @@ public:
     int GetDriveNum() const override;
     std::vector<int32_t> GetDriveIds() const override;
 
+    // 仅在初始化/停止后配置；无硬件映射的 mimic 不产生 PDO 指令。
+    void ConfigureMimicJoints(const std::vector<MimicJoint>& joints);
+    Result ApplyPositionCoupling(JntArray& q) const override;
+
     double GetJointPosition(int32_t id) override;
     double GetJointVelocity(int32_t id) override;
     double GetJointTorque(int32_t id) override;
@@ -252,6 +257,15 @@ public:
     static HardwareConfig LoadConfigFromNode(const YAML::Node& root);
 
 private:
+    struct MimicDrive {
+        int32_t id;
+        int32_t source_id;
+        double multiplier;
+        double offset;
+    };
+    std::vector<MimicDrive> mimic_drives_;
+    void writeJointPosition(int32_t id, double pos);
+
     /// @brief 从 YAML 文件加载硬件配置
     static HardwareConfig loadFromYAML(const std::string& yaml_file_path);
 

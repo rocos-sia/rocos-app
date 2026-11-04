@@ -250,6 +250,8 @@ Result JointAdmittanceController::UpdateCmd(const JntArray& q_des) {
         }
     }
 
+    const auto coupled = hardware_->ApplyPositionCoupling(q_out);
+    if (coupled != Result::NoError) return coupled;
     const Result valid = ValidatePositionCommand(q_out);
     if (valid != Result::NoError) {
         return valid;
@@ -294,7 +296,14 @@ Result JointAdmittanceController::ValidatePositionCommand(const JntArray& q_cmd)
 
     // 速度校验比较的是“指令步进”(q_cmd - q_last_cmd_)，而不是“指令 vs 反馈”
     // (q_cmd - q_actual)。反馈位置天然滞后于指令（跟随误差），用它除以 dt 会误报 SpeedLimit。
-    const bool has_prev_cmd = has_last_cmd_ && q_last_cmd_.rows() == joint_num;
+    const JntArray* previous =
+        has_last_cmd_ && q_last_cmd_.rows() == joint_num ? &q_last_cmd_ : nullptr;
+    if (!previous) {
+        auto coupled_actual = q_actual;
+        const auto rc = hardware_->ApplyPositionCoupling(coupled_actual);
+        if (rc != Result::NoError) return rc;
+        if (!coupled_actual.data.isApprox(q_actual.data, 1e-9)) previous = &q_actual;
+    }
 
     for (unsigned int i = 0; i < joint_num; ++i) {
         if (!std::isfinite(q_cmd(i)) || !std::isfinite(q_actual(i)) ||
@@ -308,8 +317,8 @@ Result JointAdmittanceController::ValidatePositionCommand(const JntArray& q_cmd)
         if (q_vel_limit(i) < 0.0) {
             return Result::IllegalParameter;
         }
-        if (has_prev_cmd) {
-            const double cmd_velocity = std::abs(q_cmd(i) - q_last_cmd_(i)) / dt;
+        if (previous) {
+            const double cmd_velocity = std::abs(q_cmd(i) - (*previous)(i)) / dt;
             if (cmd_velocity > q_vel_limit(i)) {
                 return Result::SpeedLimit;
             }

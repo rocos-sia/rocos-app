@@ -49,6 +49,11 @@ class HardwareInterface : public DriveInterface,
     return 1000;
   };
 
+  // 位置控制器在限位/速度检查前应用硬件联动约束。
+  virtual Result ApplyPositionCoupling(JntArray& /*q*/) const {
+    return Result::NoError;
+  }
+
   /// @brief 设置 model index → drive id 映射表（建模层到硬件层的轴绑定）
   virtual Result SetJointBinding(const std::vector<int32_t>& /*model_index_to_drive_id*/) {
     return Result::FunctionNotSupported;

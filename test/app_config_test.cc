@@ -265,6 +265,31 @@ TEST_CASE_FIXTURE(ConfigFixture, "Device zero calibration replaces nominal count
     CHECK_THROWS(rocos::AppConfig::load(entry.string()));
 }
 
+TEST_CASE_FIXTURE(ConfigFixture, "Main-chain mimic binding follows the hardware joint names") {
+    const auto entry = composed();
+    auto robot = YAML::LoadFile((directory / "robots/talon/robot.yaml").string());
+    std::ifstream input(robot["urdf"].as<std::string>());
+    std::string xml((std::istreambuf_iterator<char>(input)), {});
+    const auto joint = xml.find("<joint name=\"joint_2\"");
+    REQUIRE(joint != std::string::npos);
+    xml.insert(xml.find('>', joint) + 1, "<mimic joint=\"joint_1\" multiplier=\"-1\"/>");
+    const auto model_file = directory / "mimic.urdf";
+    std::ofstream(model_file) << xml;
+    robot["urdf"] = model_file.string();
+    write(directory / "robots/talon/robot.yaml", robot);
+    SUBCASE("Driven mimic remains bound") {}
+    SUBCASE("Passive mimic needs no hardware entry") {
+        auto hardware = YAML::LoadFile((directory / "robots/talon/hardware.yaml").string());
+        YAML::Node drives(YAML::NodeType::Sequence);
+        for (const auto& drive : hardware["hardware"])
+            if (drive["joint_name"].as<std::string>() != "joint_2") drives.push_back(drive);
+        hardware["hardware"] = drives;
+        write(directory / "robots/talon/hardware.yaml", hardware);
+    }
+    const auto config = rocos::AppConfig::load(entry.string());
+    CHECK_NOTHROW(config.validateResources());
+}
+
 TEST_CASE_FIXTURE(ConfigFixture, "Exports preserve inputs and redact license only in effective snapshot") {
     const auto entry = composed();
     auto config = rocos::AppConfig::load(entry.string());

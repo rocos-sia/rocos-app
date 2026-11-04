@@ -710,7 +710,9 @@ void AppConfig::validateResources() const {
     require(fs::is_directory(web_root), "Web resource directory not found: " + web_root);
     if (!robot.composed_configuration) return;
     // URDF 由模型消费者校验，合并器与快照只保存路径。
-    Model model(robot.urdf, robot.base_link, robot.tip_link);
+    std::vector<std::string> driven_joint_names;
+    for (const auto& drive : robot.hardware->drives) driven_joint_names.push_back(drive.joint_name);
+    Model model(robot.urdf, robot.base_link, robot.tip_link, driven_joint_names);
     JointBinding binding;
     std::vector<int32_t> ids;
     for (const auto& drive : robot.hardware->drives) ids.push_back(drive.id);

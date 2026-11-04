@@ -9,10 +9,10 @@
 #include "position_command_validation.hpp"
 
 namespace rocos {
-Result GenerateMotionPreview(ModelInterface& model,
-                             const MotionPreviewRequest& request, double dt,
+Result GenerateMotionPreview(ModelInterface& model, const MotionPreviewRequest& input, double dt,
                              MotionPreviewResult& result) {
     result = {};
+    auto request = input;
     if (request.max_points < 2 || request.max_points > 2000 ||
         !std::isfinite(dt) || dt <= 0 || dt > 1 ||
         !std::isfinite(request.velocity) || request.velocity <= 0 ||
@@ -26,7 +26,9 @@ Result GenerateMotionPreview(ModelInterface& model,
     if (!joint_motion && request.motion_type != "MoveL" &&
         request.motion_type != "MoveL_FK")
         return Result::FunctionNotSupported;
-    auto rc = ValidateJointCommand(model, request.start_joints, nullptr, dt);
+    auto rc = model.ApplyPositionCoupling(request.start_joints);
+    if (rc != Result::NoError) return rc;
+    rc = ValidateJointCommand(model, request.start_joints, nullptr, dt);
     if (rc != Result::NoError) return rc;
     const auto deadline =
         std::chrono::steady_clock::now() + std::chrono::seconds(5);
@@ -37,6 +39,8 @@ Result GenerateMotionPreview(ModelInterface& model,
     if (rc != Result::NoError) return rc;
     JntArray target = request.joints;
     if (joint_target) {
+        rc = model.ApplyPositionCoupling(target);
+        if (rc != Result::NoError) return rc;
         rc = ValidateJointCommand(model, target, nullptr, dt);
         if (rc != Result::NoError) return rc;
         if (!joint_motion) {
@@ -84,8 +88,10 @@ Result GenerateMotionPreview(ModelInterface& model,
             Reference ref;
             rc = motion->GenerateRef(ref);
             if (rc != Result::NoError && rc != Result::PlanFinished) return rc;
-            const auto* q = std::get_if<JntArray>(&ref);
+            auto* q = std::get_if<JntArray>(&ref);
             if (!q) return Result::MoveInput;
+            const auto coupled = model.ApplyPositionCoupling(*q);
+            if (coupled != Result::NoError) return coupled;
             const auto valid =
                 ValidateJointCommand(model, *q, &samples.back(), dt);
             if (valid != Result::NoError) return valid;
