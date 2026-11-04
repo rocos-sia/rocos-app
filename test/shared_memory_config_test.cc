@@ -137,6 +137,56 @@ TEST_CASE_FIXTURE(BusFixture, "Real Hardware connects to a v2 master in another 
     CHECK(master.getSlaveOutputVarValue<int16_t>(0, 0) == -2);
 }
 
+TEST_CASE_FIXTURE(BusFixture, "Hardware velocity ignores the position offset") {
+    int32_t raw = 0;
+    double expectedVelocity = 0.0;
+    SUBCASE("Stationary") {}
+    SUBCASE("Positive velocity") {
+        raw = 200;
+        expectedVelocity = 2.0;
+    }
+    SUBCASE("Negative velocity") {
+        raw = -200;
+        expectedVelocity = -2.0;
+    }
+    master.setSlaveInputVarValue<int32_t>(0, 1, raw);
+    REQUIRE(master.notifyClients());
+    const pid_t child = fork();
+    REQUIRE(child >= 0);
+    if (child == 0) {
+        try {
+            rocos::HardwareConfig config;
+            rocos::Drive drive;
+            drive.id = 0;
+            drive.inputs.status_word = "status";
+            // 同一模拟 PDO 数值分别验证位置和速度换算，不连接真实硬件。
+            drive.inputs.position_actual_value = "position";
+            drive.inputs.velocity_actual_value = "position";
+            drive.outputs.control_word = "control";
+            drive.transform.offset_pos_cnt = 100;
+            drive.transform.cnt_per_unit = 50.0;
+            drive.transform.ratio = 2.0;
+            config.drives.push_back(drive);
+            bool ok = false;
+            {
+                rocos::Hardware hardware(config, id);
+                ok = hardware.GetJointVelocity(0) == expectedVelocity &&
+                     hardware.GetVelocity()(0) == expectedVelocity &&
+                     hardware.GetJointPosition(0) == expectedVelocity - 1.0;
+            }
+            rocos::EcatConfig::getInstance(id)->disconnect();
+            _exit(ok ? 0 : 1);
+        } catch (const std::exception& error) {
+            std::cerr << error.what() << std::endl;
+            _exit(2);
+        }
+    }
+    int status = 0;
+    REQUIRE(waitpid(child, &status, 0) == child);
+    REQUIRE(WIFEXITED(status));
+    CHECK(WEXITSTATUS(status) == 0);
+}
+
 TEST_CASE_FIXTURE(BusFixture, "App compatibility include rejects an incompatible ABI without exiting") {
     master.header->abi_version = 1;
     rocos::SharedMemoryConfig client(id);

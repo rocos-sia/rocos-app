@@ -175,8 +175,9 @@ public:
     /// @brief 从 YAML 配置文件构造硬件抽象层
     /// @param yaml_file_path 硬件描述 YAML 文件路径
     /// @param ecat_id         EtherCAT 主站 ID（默认 0）
-    explicit Hardware(const std::string& yaml_file_path, int ecat_id = 0);
-    explicit Hardware(const HardwareConfig& config, int ecat_id = 0);
+    /// @param cycle_timeout_ms 周期等待超时；0 保持原有无限等待行为。
+    explicit Hardware(const std::string& yaml_file_path, int ecat_id = 0, uint32_t cycle_timeout_ms = 0);
+    explicit Hardware(const HardwareConfig& config, int ecat_id = 0, uint32_t cycle_timeout_ms = 0);
     ~Hardware();
 
 
@@ -257,6 +258,7 @@ public:
     static HardwareConfig LoadConfigFromNode(const YAML::Node& root);
 
 private:
+    uint32_t cycle_timeout_ms_ = 0;
     struct MimicDrive {
         int32_t id;
         int32_t source_id;

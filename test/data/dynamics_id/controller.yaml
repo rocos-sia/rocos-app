@@ -1,0 +1,27 @@
+{
+  "urdf": "robot.urdf",
+  "hardware": "hardware.yaml",
+  "rigid_model": "rigid_model.json",
+  "friction": "friction_model.json",
+  "kp": [
+    20,
+    18
+  ],
+  "kd": [
+    4,
+    3
+  ],
+  "velocity_limit": [
+    0.4,
+    0.4
+  ],
+  "friction_scale": 0.7,
+  "torque_limit": [
+    30,
+    30
+  ],
+  "torque_rate_limit": [
+    100,
+    100
+  ]
+}

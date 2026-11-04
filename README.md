@@ -106,6 +106,11 @@ ctest --preset debug -R '^move_joint_test$'
 每个路径相对**声明它的 YAML 文件**，用户覆盖中的路径相对 `user.yaml`。优先级为内置默认值 → 基础文件 → 单份 `user.yaml` → 显式 HTTP 命令行参数。详细字段、部署权限、覆盖示例和独立主站的兼容边界见 [配置说明](config/README.md)。
 
 
+## 整机动力学辨识与阻抗验证
+
+通过独立程序直接使用 Hardware 执行激励轨迹、采集实测力矩并验证辨识模型。
+构建命令、模型导出脚本和配置方法见 [Dynamics ID README](examples/dynamics_id/README.md)。
+
 ## Related Projects
 
 
