@@ -1,0 +1,13 @@
+# Talon 仿真启动配置。
+# 仓库根目录运行：rocos_mujoco_sim --config models/talon/mjcf/mujoco.yaml
+model: scene.xml                 # 同目录下的 MJCF 场景
+# 支持绝对路径；相对路径以本 YAML 所在目录为基准。
+# 明确指定所需文件，不扫描目录或推断 XML 文件名。
+
+# Talon 目录统一管理硬件配置，相对路径以本 YAML 所在目录为基准。
+hardware_config: ../hardware.yaml
+
+ecat_id: 0                        # EtherCAT 主站 ID，非负整数
+cycle_time_us: 1000.0             # 控制周期（微秒），至少 1
+duration_sec: -1.0                # 运行时长（秒），-1 为持续运行，0 为仅初始化
+visualize: true                  # true 开启窗口，需要 linux-release 或 linux-debug 构建

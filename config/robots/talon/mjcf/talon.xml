@@ -1,0 +1,112 @@
+<mujoco model="talon">
+    <compiler angle="radian" meshdir="../meshes" autolimits="true" />
+
+    <option integrator="implicitfast" />
+
+    <default>
+        <default class="talon">
+            <material specular="0.5" shininess="0.25"/>
+            <joint axis="0 0 1"/>
+            <general gaintype="fixed" biastype="affine" gainprm="2000" biasprm="0 -2000 -200"/>
+            <default class="joint_1">
+                <joint range="-2.96706 2.96706"/>
+                <general ctrlrange="-2.96706 2.96706"/>
+            </default>
+            <default class="joint_2">
+                <joint range="-2.0944 2.0944"/>
+                <general ctrlrange="-2.0944 2.0944"/>
+            </default>
+            <default class="joint_3">
+                <joint range="-3.05433 3.05433"/>
+                <general ctrlrange="-3.05433 3.05433"/>
+            </default>
+            <default class="visual">
+                <geom type="mesh" contype="0" conaffinity="0" group="2" material="white"/>
+            </default>
+            <default class="collision">
+                <geom group="3"/>
+            </default>
+            <site size="0.001" rgba="1 0 0 1" group="4"/>
+        </default>
+    </default>
+
+    <asset>
+        <material class="talon" name="white" rgba="1 1 1 1"/>
+
+        <mesh file="base_link.STL" />
+        <mesh file="link_1.STL" />
+        <mesh file="link_2.STL" />
+        <mesh file="link_3.STL" />
+        <mesh file="link_4.STL" />
+        <mesh file="link_5.STL" />
+        <mesh file="link_6.STL" />
+        <mesh file="link_7.STL" />
+    </asset>
+
+    <worldbody>
+        <light name="top" pos="0 0 2" mode="trackcom"/>
+        <body name="base_link" childclass="talon">
+            <inertial mass="5" pos="-0.1 0 0.07" diaginertia="0.05 0.06 0.03"/>
+            <geom class="visual" mesh="base_link" />
+            <body name="link_1" pos="0.0 0.0 0.348" quat="1 0 0 0">
+                <inertial mass="5.683" pos="0.0 0.008 -0.071" diaginertia="0.075 0.075 0.012"/>
+                <joint name="joint_1" class="joint_1" />
+                <geom class="visual" mesh="link_1" />
+                <body name="link_2" pos="0 0 0" quat="0.707 0.707 0 0">
+                    <inertial mass="3.99" pos="0.000 0.117 0.024" diaginertia="0.099 0.01 0.096"/>
+                    <joint name="joint_2" class="joint_1" />
+                    <geom class="visual" mesh="link_2" />
+                    <body name="link_3" pos="0 0.41 0" quat="-0.707 0.707 0 0">
+                        <inertial mass="3.685" pos="0.000 0.009 -0.058" diaginertia="0.034 0.031 0.006"/>
+                        <joint name="joint_3" class="joint_1" />
+                        <geom class="visual" mesh="link_3" />
+                        <body name="link_4" pos="0 0 0" quat="0.707 0.707 0 0">
+                            <inertial mass="3.185" pos="0.000 0.136 0.016" diaginertia="0.085 0.006 0.084"/>
+                            <joint name="joint_4" class="joint_1" />
+                            <geom class="visual" mesh="link_4" />
+                            <body name="link_5" pos="0 0.401 0" quat="-0.707 0.707 0 0">
+                                <inertial mass="2.932" pos="0.0 0.008 -0.071" diaginertia="0.032 0.032 0.004"/>
+                                <joint name="joint_5" class="joint_1" />
+                                <geom class="visual" mesh="link_5" />
+                                <body name="link_6" pos="0 0 0" quat="0.707 0.707 0 0">
+                                    <inertial mass="2.043" pos="0.000 0.089 0.018" diaginertia="0.029 0.003 0.028"/>
+                                    <joint name="joint_6" class="joint_1" />
+                                    <geom class="visual" mesh="link_6" />
+                                    <body name="link_7" pos="0 0.230 0" quat="-0.707 0.707 0 0">
+                                        <inertial mass="0.994" pos="0.000 0.00 -0.032" diaginertia="0.002 0.002 0.001"/>
+                                        <joint name="joint_7" class="joint_1" />
+                                        <geom class="visual" mesh="link_7" />
+                                    </body>
+                                </body>
+                            </body>
+                        </body>
+                    </body>
+                </body>
+
+
+            </body>
+        </body>
+    </worldbody>
+
+    <!-- <actuator>
+        <general name="actuator_1" joint="joint_1" class="joint_1" />
+        <general name="actuator_2" joint="joint_2" class="joint_1" />
+        <general name="actuator_3" joint="joint_3" class="joint_1" />
+        <general name="actuator_4" joint="joint_4" class="joint_1" />
+        <general name="actuator_5" joint="joint_5" class="joint_1" />
+        <general name="actuator_6" joint="joint_6" class="joint_1" />
+        <general name="actuator_7" joint="joint_7" class="joint_1" />
+    </actuator> -->
+
+    <actuator>
+    <!-- joint_1 到 joint_7: 转动关节，位置控制带 PD -->
+    <position joint="joint_1" kp="20000" kv="500" ctrlrange="-3.14 3.14"/>
+    <position joint="joint_2" kp="20000" kv="500" ctrlrange="-3.14 3.14"/>
+    <position joint="joint_3" kp="20000" kv="500" ctrlrange="-3.14 3.14"/>
+    <position joint="joint_4" kp="20000" kv="500" ctrlrange="-3.14 3.14"/>
+    <position joint="joint_5" kp="20000" kv="500" ctrlrange="-3.14 3.14"/>
+    <position joint="joint_6" kp="20000" kv="500" ctrlrange="-3.14 3.14"/>
+    <position joint="joint_7" kp="20000" kv="500" ctrlrange="-3.14 3.14"/>
+  </actuator>
+
+</mujoco>
