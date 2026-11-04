@@ -1,0 +1,46 @@
+{
+  "joint_names": [
+    "joint_1",
+    "joint_2"
+  ],
+  "urdf_hash": "fc7630491b14ecbaa1ea2fa34679ba296940856523cc676857b64d75383aab4c",
+  "limits_verified": true,
+  "config": {
+    "duration": 2.0,
+    "sample_rate": 1000,
+    "bounds": [
+      {
+        "lower": -1,
+        "upper": 1,
+        "velocity": 2,
+        "acceleration": 2,
+        "center": 0
+      },
+      {
+        "lower": -1,
+        "upper": 1,
+        "velocity": 2,
+        "acceleration": 2,
+        "center": 0
+      }
+    ]
+  },
+  "coefficients": [
+    [
+      [
+        0.01
+      ],
+      [
+        0.005
+      ]
+    ],
+    [
+      [
+        0.02
+      ],
+      [
+        -0.01
+      ]
+    ]
+  ]
+}

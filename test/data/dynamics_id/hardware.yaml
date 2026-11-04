@@ -1,0 +1,68 @@
+{
+  "hardware": [
+    {
+      "type": "driver",
+      "id": 1,
+      "joint_name": "joint_2",
+      "limit": {
+        "lower": -2,
+        "upper": 2,
+        "vel": 3,
+        "acc": 2,
+        "jerk": 20,
+        "effort": 50
+      },
+      "transform": {
+        "ratio": 0.5,
+        "offset_pos_cnt": -500,
+        "cnt_per_unit": 100000,
+        "torque_per_unit": 20,
+        "user_unit_name": "rad"
+      },
+      "inputs": {
+        "status_word": "status",
+        "position_actual_value": "position",
+        "velocity_actual_value": "velocity",
+        "torque_actual_value": "torque"
+      },
+      "outputs": {
+        "control_word": "control",
+        "mode_of_operation": "mode",
+        "target_position": "target",
+        "target_torque": "target_torque"
+      }
+    },
+    {
+      "type": "driver",
+      "id": 0,
+      "joint_name": "joint_1",
+      "limit": {
+        "lower": -2,
+        "upper": 2,
+        "vel": 3,
+        "acc": 2,
+        "jerk": 20,
+        "effort": 50
+      },
+      "transform": {
+        "ratio": 2,
+        "offset_pos_cnt": 1000,
+        "cnt_per_unit": 100000,
+        "torque_per_unit": 10,
+        "user_unit_name": "rad"
+      },
+      "inputs": {
+        "status_word": "status",
+        "position_actual_value": "position",
+        "velocity_actual_value": "velocity",
+        "torque_actual_value": "torque"
+      },
+      "outputs": {
+        "control_word": "control",
+        "mode_of_operation": "mode",
+        "target_position": "target",
+        "target_torque": "target_torque"
+      }
+    }
+  ]
+}

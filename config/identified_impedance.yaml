@@ -1,0 +1,19 @@
+# 使用流程见 examples/dynamics_id/README.md。
+# 所有路径相对于本 YAML。使用辨识时的原始 URDF，不恢复或改写惯性。
+# 先用 examples/dynamics_id/export_impedance_model.py 导出 Pβ，再填写实际路径。
+urdf: ../models/identified/robot.urdf
+rigid_model: ../models/identified/rigid_model.json
+friction: ../models/identified/friction_model.json
+hardware: robots/talon/hardware.yaml
+
+# 以下为七轴格式示例，数组按 rigid_model.json 的 joint_names 顺序填写。
+# Kp: Nm/rad，Kd: Nm*s/rad；需要按实际实验设置。
+kp: [20, 20, 20, 20, 10, 8, 5]
+kd: [4, 4, 4, 3, 2, 1.5, 1]
+friction_scale: 0.2
+velocity_limit: [0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4]  # rad/s
+torque_limit: [30, 30, 30, 30, 15, 15, 10]           # Nm
+torque_rate_limit: [100, 100, 100, 100, 50, 50, 30]    # Nm/s
+
+# 不读取 rated_torque、不覆盖 torque_per_unit；比例完全由 Hardware YAML 提供。
+# 本文件是接入模板；models/identified/ 下的文件需由实际辨识结果提供。

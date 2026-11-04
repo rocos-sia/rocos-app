@@ -7,6 +7,8 @@
 #include <yaml-cpp/yaml.h>
 
 #include <chrono>
+#include <cerrno>
+#include <ctime>
 #include <cmath>
 #include <set>
 #include <sstream>
@@ -189,10 +191,11 @@ IO Hardware::parseIO(const YAML::Node& node) {
 // 构造 / 析构
 // ==========================================================================
 
-Hardware::Hardware(const std::string& yaml_file_path, int ecat_id)
-    : Hardware(loadFromYAML(yaml_file_path), ecat_id) {}
+Hardware::Hardware(const std::string& yaml_file_path, int ecat_id, uint32_t cycle_timeout_ms)
+    : Hardware(loadFromYAML(yaml_file_path), ecat_id, cycle_timeout_ms) {}
 
-Hardware::Hardware(const HardwareConfig& config, int ecat_id) : config_(config) {
+Hardware::Hardware(const HardwareConfig& config, int ecat_id, uint32_t cycle_timeout_ms)
+    : cycle_timeout_ms_(cycle_timeout_ms), config_(config) {
     auto log_ptr = Logger::getInstance("Hardware");
 
     // 2. 构建 ID → 索引 O(1) 查找表（vector 预分配 + -1 哨兵）
@@ -246,6 +249,24 @@ Hardware::~Hardware() {
 }
 
 void Hardware::WaitForSignal() {
+    if (cycle_timeout_ms_ > 0) {
+        // 使用同一通知槽，独立实验可在断流后退出等待并请求下使能。
+        auto* signal = ec_ptr_->sem_mutex[8];
+        if (!signal || signal == SEM_FAILED) throw std::runtime_error("Invalid EtherCAT cycle semaphore");
+        timespec deadline{};
+        if (clock_gettime(CLOCK_REALTIME, &deadline) != 0)
+            throw std::runtime_error("Cannot read cycle deadline clock");
+        deadline.tv_sec += cycle_timeout_ms_ / 1000;
+        deadline.tv_nsec += static_cast<long>(cycle_timeout_ms_ % 1000) * 1000000L;
+        deadline.tv_sec += deadline.tv_nsec / 1000000000L;
+        deadline.tv_nsec %= 1000000000L;
+        while (sem_timedwait(signal, &deadline) != 0) {
+            if (errno == EINTR) continue;
+            if (errno == ETIMEDOUT) throw std::runtime_error("EtherCAT cycle timed out");
+            throw std::runtime_error("EtherCAT v2 cycle wait failed");
+        }
+        return;
+    }
     if (!ec_ptr_->waitForSignal(8)) {
         throw std::runtime_error("EtherCAT v2 cycle wait failed");
     }
@@ -430,7 +451,10 @@ double Hardware::GetJointVelocity(int32_t id) {
     if (idx < 0) return 0.0;
     const auto& cache = drive_pdo_cache_[static_cast<size_t>(idx)];
     if (!cache.velocity_actual_value) return 0.0;
-    return cntToUnit(config_.drives[static_cast<size_t>(idx)], cache.velocity_actual_value.read());
+    const auto& transform = config_.drives[static_cast<size_t>(idx)].transform;
+    // 速度只做比例换算，不减去位置零点偏移。
+    return static_cast<double>(cache.velocity_actual_value.read()) / transform.cnt_per_unit /
+           transform.ratio;
 }
 
 double Hardware::GetJointTorque(int32_t id) {

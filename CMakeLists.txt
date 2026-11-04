@@ -28,7 +28,7 @@ find_package(LibArchive REQUIRED)
 find_package(OpenSSL REQUIRED)
 
 # CMake VERSION 仅接受数字；完整 SemVer 版本单独拼接。
-set(ROCOS_APP_VERSION_PRERELEASE "rc.4")
+set(ROCOS_APP_VERSION_PRERELEASE "rc.5")
 set(ROCOS_APP_VERSION_FULL "${PROJECT_VERSION}")
 if(NOT ROCOS_APP_VERSION_PRERELEASE STREQUAL "")
     string(APPEND ROCOS_APP_VERSION_FULL "-${ROCOS_APP_VERSION_PRERELEASE}")
@@ -212,6 +212,19 @@ target_link_libraries(robot
 target_link_libraries(robot PRIVATE pin_ik pinocchio::pinocchio tinyxml2)
 add_library(rocos::robot ALIAS robot)
 
+# 独立辨识示例只链接 Hardware 与模型算法，不构造或链接 Robot/Executor。
+add_library(identification_hardware STATIC src/hardware.cpp)
+target_link_libraries(identification_hardware PUBLIC ${DEP_LIBS} rocos::shm rocos::logger)
+target_include_directories(identification_hardware PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+add_library(identified_joint_impedance STATIC examples/dynamics_id/identified_joint_impedance.cpp)
+target_link_libraries(identified_joint_impedance PUBLIC identification_hardware
+        PRIVATE pinocchio::pinocchio tinyxml2 OpenSSL::Crypto)
+target_include_directories(identified_joint_impedance PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/examples/dynamics_id)
+add_executable(dynamicsIdMain examples/dynamics_id/dynamics_id_main.cc)
+target_link_libraries(dynamicsIdMain PRIVATE identification_hardware gflags::gflags)
+add_executable(jointImpedanceVelocityMain examples/dynamics_id/joint_impedance_main.cc)
+target_link_libraries(jointImpedanceVelocityMain PRIVATE identified_joint_impedance gflags::gflags)
+
 
 # rocos_app convenience target (no protocol - replaced by HTTP server in robot library)
 add_library(rocos_app INTERFACE)
@@ -312,6 +325,25 @@ configure_file(include/ver.h.in ver.h) # Version Definition
 #############
 
 enable_testing()
+add_executable(identified_hardware_test test/identified_hardware_test.cc)
+target_link_libraries(identified_hardware_test PRIVATE identified_joint_impedance)
+target_compile_definitions(identified_hardware_test PRIVATE
+        IDENTIFICATION_TEST_DATA="${CMAKE_SOURCE_DIR}/test/data/dynamics_id")
+add_test(NAME identified_hardware_test COMMAND identified_hardware_test)
+add_test(NAME dynamics_id_check_test COMMAND dynamicsIdMain --check_only
+        --hardware=${CMAKE_SOURCE_DIR}/test/data/dynamics_id/hardware.yaml
+        --trajectory=${CMAKE_SOURCE_DIR}/test/data/dynamics_id/trajectory.json)
+add_test(NAME identified_impedance_check_test COMMAND jointImpedanceVelocityMain --check_only
+        --config=${CMAKE_SOURCE_DIR}/test/data/dynamics_id/controller.yaml)
+add_executable(identification_execution_test test/identification_execution_test.cc)
+target_link_libraries(identification_execution_test PRIVATE identification_hardware)
+target_compile_definitions(identification_execution_test PRIVATE
+        IDENTIFICATION_TEST_DATA="${CMAKE_SOURCE_DIR}/test/data/dynamics_id"
+        ACQUISITION_EXECUTABLE="$<TARGET_FILE:dynamicsIdMain>"
+        IMPEDANCE_EXECUTABLE="$<TARGET_FILE:jointImpedanceVelocityMain>")
+add_dependencies(identification_execution_test dynamicsIdMain jointImpedanceVelocityMain)
+add_test(NAME identification_execution_test COMMAND identification_execution_test)
+set_tests_properties(identification_execution_test PROPERTIES RUN_SERIAL TRUE TIMEOUT 60)
 add_executable(math_types_test test/math_types_test.cc)
 target_include_directories(math_types_test PRIVATE ${CMAKE_SOURCE_DIR})
 target_link_libraries(math_types_test PRIVATE Eigen3::Eigen)
