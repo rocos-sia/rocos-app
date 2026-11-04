@@ -418,6 +418,44 @@ slaves:
     CHECK_THROWS(rocos::AppConfig::load(entry.string()));
 }
 
+TEST_CASE_FIXTURE(ConfigFixture, "MuJoCo connection needs no EtherCAT master resources") {
+    const auto entry = composed();
+    fs::remove(directory / "robots/talon/ecm.yaml");
+    write(directory / "overrides/master.yaml", YAML::Load("master: {id: 2, cycle: 2000, state: op}"));
+    const std::string selection = "robot: {ecat_id: 2, master_type: mujoco, master_config: master.yaml";
+    overrideWith(selection + "}\n");
+    const auto config = rocos::AppConfig::load(entry.string());
+    CHECK(config.robot.ecat_id == 2);
+    CHECK(config.robot.master_cycle_us == 2000);
+    CHECK(config.robot.master_state == "op");
+    CHECK_FALSE(config.effective["robot"]["master"]["eni"].IsDefined());
+    CHECK_FALSE(config.effective["snapshot"]["internal_defaults"].IsDefined());
+    CHECK_NOTHROW(config.validateResources());
+    config.exportConfiguration((directory / "export").string());
+    const auto exported = YAML::LoadFile((directory / "export/mujoco.yaml").string());
+    CHECK(exported["master"]["cycle"].as<int>() == 2000);
+    CHECK(exported["master"].size() == 3);
+    CHECK_FALSE(fs::exists(directory / "export/ecm-legacy.yaml"));
+    for (const auto* invalid : {"id: 0", "cycle: 0", "cycle: 2147484", "state: safeop", "eni: unused.xml"}) {
+        CAPTURE(invalid);
+        overrideWith(selection + ", master: {" + invalid + "}}\n");
+        CHECK_THROWS(rocos::AppConfig::load(entry.string()));
+    }
+}
+
+TEST_CASE("Repository RCM simulation config binds all driven joints") {
+    const auto source = fs::path(ROCOS_TEST_CONFIG_FILE).parent_path();
+    const auto config = rocos::AppConfig::load((source / "app_rcm.yaml").string());
+    CHECK(config.robot.base_link == "base_link");
+    CHECK(config.robot.tip_link == "Link_9");
+    REQUIRE(config.robot.hardware.has_value());
+    CHECK(config.robot.hardware->drives.size() == 8);
+    CHECK_NOTHROW(config.validateResources());
+    const auto simulator = YAML::LoadFile((source / "robots/rcm/mjcf/mujoco.yaml").string());
+    CHECK(config.robot.ecat_id == simulator["ecat_id"].as<int>());
+    CHECK(config.robot.master_cycle_us == simulator["cycle_time_us"].as<double>());
+}
+
 TEST_CASE_FIXTURE(ConfigFixture, "ECM v2 command deadline is validated and exported") {
     const auto entry = composed();
     auto master = YAML::LoadFile((directory / "robots/talon/ecm.yaml").string());

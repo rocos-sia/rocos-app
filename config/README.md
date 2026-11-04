@@ -102,6 +102,7 @@ App 组合并校验配置；**独立主站负责实际消费主站参数**。本
 
 - ECM：源文件只允许根级 `master`。导出 `ecm.yaml` 保持新结构；`ecm-legacy.yaml` 仅用于旧 ECM 解析器，把具名枚举转为原数字并展开顶层。路径已绝对化，`auxclk/flash` 使用后端内部默认值。
 - IgH：支持规范版本 `version: 2` 的结构读取、覆盖、校验和导出，根级 `slaves` 在组合时进入 `robot.master.slaves`。不将旧版 `version: 1` 或新参数静默降级。当前独立 IgH 程序尚需实现新版参数与运行状态控制，不能直接把导出文件交给旧版程序。
+- MuJoCo：`master_type: mujoco` 的主站文件只包含 `master: {id: 0, cycle: 1000, state: op}`，描述已运行仿真器的共享内存连接，不需要 ENI 或 EtherCAT 从站配置。`cycle` 单位为微秒，须与仿真器 `cycle_time_us` 相同。App 不启动仿真器；导出的 `mujoco.yaml` 是 App 连接参数，不能作为 rocos-mujoco 的启动配置。RCM 示例入口为 `config/app_rcm.yaml`，使用方法见 [RCM 仿真说明](robots/rcm/mjcf/README.md)。
 - 运行主站必须使用同一份导出参数，不能再通过未记录的主站 CLI 覆盖周期/ID。App 校验 `robot.ecat_id == robot.master.id`，连接后核对共享内存周期；PDO 名称、类型/位宽及实际拓扑仍须与主站配置和设备一致。`--check_config` 不进行总线发现或设备读回。
 - `master.state` 接受 `init/preop/safeop/op`；App 控制进程仅允许 `op`。运行中改配置切换主站状态需要独立主站和运动互锁协同实现，本次不会触发状态切换。
 

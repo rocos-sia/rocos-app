@@ -14,9 +14,27 @@ rocos_mujoco_sim --config config/robots/rcm/mjcf/mujoco.yaml
 
 Python 中可用 `mujoco.MjModel.from_xml_path()` 加载模型，用 `mujoco.mj_resetDataKeyframe(model, data, 0)` 恢复 `home`。启动 YAML 的硬件映射指向 `../hardware.yaml`。
 
+## 连接 rocos-app
+
+先使用上述 `mujoco.yaml` 启动 rocos-mujoco，再从 rocos-app 仓库根目录运行：
+
+```bash
+cmake --build --preset release --target rocosAppMain --parallel 2
+./build/release/bin/rocosAppMain --config=config/app_rcm.yaml --check_config
+./build/release/bin/rocosAppMain --config=config/app_rcm.yaml
+```
+
+`app_rcm.yaml` 选择 `../robot.yaml` 对应的 RCM 型号和 `rcm_sim` 设备，末端为固定传感器连杆 `Link_9`。App 的 `master_type: mujoco` 使用 `../master.yaml` 描述共享内存连接，ID=0、周期=1000 μs，必须与仿真器一致。该配置需要支持 `mujoco` 类型的新版 App，因此先重新编译；App 不负责启动仿真器。两端使用同一份 `hardware.yaml`，每个共享内存 ID 只运行一个 App 控制进程。
+
+`../master.yaml` 及 App 导出的 `mujoco.yaml` 都是 App 连接参数；仿真器启动仍使用本目录的 `mujoco.yaml`。`--check_config` 仅验证配置与模型，不检查正在运行的共享内存。
+
+初始移动关节位置为 0.03 m，比下限 0.02 m 留出 10 mm 余量，避免重力下沉导致 App 启动时读到限位外位置。修改模型后须重启 rocos-mujoco；运行中的实例不会自动重载 XML。
+
+此初始姿态已完成 5 秒物理保持检查：全部关节位于限位内，无 MuJoCo 警告或接触穿透；三组相同关节坐标下的连杆变换与修改前一致。独立共享内存 ID=49 的无界面仿真与 App 联调通过，8 个驱动和 1 个力传感器加载成功，App 进入未使能的 IDLE 并启动 HTTP 服务；测试进程随后退出。用户已运行的 ID=0 实例需重启后采用新姿态。
+
 ## 关节与控制
 
-保留 `base_link`、`Link_1` 至 `Link_9` 的名称和连接关系。joint_1、joint_3 为 `slide`，其余六个活动关节为 `hinge`；joint_9 以固定 body 表达。移动关节的 `ref=0.02` 配合 body 原点平移，使初始位置在限位内，同时保持关节坐标和 URDF 正运动学一致。
+保留 `base_link`、`Link_1` 至 `Link_9` 的名称和连接关系。joint_1、joint_3 为 `slide`，其余六个活动关节为 `hinge`；joint_9 以固定 body 表达。移动关节的 `ref=0.03` 配合 body 原点平移，使初始位置在限位内，同时保持关节坐标和 URDF 正运动学一致。
 
 | ctrl 索引 | 执行器 | 关节 | 单位与行为 |
 | --- | --- | --- | --- |
@@ -41,7 +59,7 @@ Python 中可用 `mujoco.MjModel.from_xml_path()` 加载模型，用 `mujoco.mj_
 - CoACD 参数为 threshold=0.01、preprocess_resolution=60、resolution=1000、mcts_nodes=10、mcts_iterations=40、mcts_max_depth=3、max_convex_hull=40、decimate=true、max_ch_vertex=64、seed=0。40 块上限下最终 concavity 约 0.0562，未达到请求的 0.01；不应将该近似当作精密碰撞边界。
 - 地面位于 z=-0.103 m，对齐基座 STL 的最低点附近；机器人基坐标保持在原点。geom 质量设为 0，body 使用显式惯量，避免从网格密度重复估算质量。
 
-## 已执行验证
+## 初版模型已执行验证（初始移动关节位置 0.02 m）
 
 - MuJoCo 3.14.0：两个入口均加载成功；8 个活动关节、8 个执行器、2 条 mimic 约束。
 - 三组关节姿态与 URDF 正运动学逐连杆对照，最大误差小于 1e-12；质量及完整惯量一致。

@@ -172,6 +172,15 @@ void devicePaths(Node node, const std::string& file) {
             path(node["calibration_files"], key, file, true);
 }
 Node masterConfig(Node master, const std::string& type, const std::string& where) {
+    if (type == "mujoco") {
+        // 仅描述已运行仿真器的共享内存连接，不配置或启动 EtherCAT 主站。
+        keys(master, {"id", "cycle", "state"}, where);
+        master = merge(YAML::Load("id: 0\ncycle: 1000\nstate: op\n"), master);
+        integer(master, "id", 0, std::numeric_limits<int>::max(), where);
+        integer(master, "cycle", 1, 2147483, where);
+        choice(master, "state", {"op"}, where);
+        return master;
+    }
     const bool ecm = type == "ecm";
     if (ecm)
         keys(master,
@@ -517,7 +526,7 @@ diagnostics: {host: 0.0.0.0, port: 8082, max_sse_clients: 4, max_downloads: 1}
         for (auto key : {"urdf", "base_link", "tip_link", "hardware_config", "master_config"})
             string(robot, key, robot_file);
         integer(robot, "ecat_id", 0, std::numeric_limits<int>::max(), robot_file);
-        choice(robot, "master_type", {"ecm", "igh"}, robot_file);
+        choice(robot, "master_type", {"ecm", "igh", "mujoco"}, robot_file);
         const auto hardware_file = robot["hardware_config"].as<std::string>();
         const auto hardware = readFile(hardware_file, config.source_files);
         keys(hardware, {"hardware"}, hardware_file);
@@ -527,7 +536,7 @@ diagnostics: {host: 0.0.0.0, port: 8082, max_sse_clients: 4, max_downloads: 1}
         const auto master_file = robot["master_config"].as<std::string>();
         auto master_document = readFile(master_file, config.source_files);
         const auto master_type = robot["master_type"].as<std::string>();
-        if (master_type == "ecm")
+        if (master_type != "igh")
             keys(master_document, {"master"}, master_file);
         else {
             keys(master_document, {"version", "master", "slaves"}, master_file);
@@ -535,7 +544,7 @@ diagnostics: {host: 0.0.0.0, port: 8082, max_sse_clients: 4, max_downloads: 1}
                     master_file + ": migrate IgH version 1 to version 2 first");
         }
         Node master = master_document["master"] ? YAML::Clone(master_document["master"]) : Node(YAML::NodeType::Map);
-        require(master.IsMap() && (master_type != "ecm" || master_document["master"]),
+        require(master.IsMap() && (master_type == "igh" || master_document["master"]),
                 master_file + ": master mapping required");
         path(master, "eni", master_file);
         path(master, "log", master_file, false, true);
@@ -656,7 +665,7 @@ diagnostics: {host: 0.0.0.0, port: 8082, max_sse_clients: 4, max_downloads: 1}
         config.effective["snapshot"]["master_parameters_applied"] = false;
         if (master_type == "igh")
             config.effective["snapshot"]["source_formats"][master_file] = 2;
-        else
+        else if (master_type == "ecm")
             config.effective["snapshot"]["internal_defaults"]["ecm"] = YAML::Load("auxclk: 0\nflash: disabled\n");
 
         config.robot.composed_configuration = true;
