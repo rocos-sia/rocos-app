@@ -1,5 +1,0 @@
-# App 连接参数，须与已运行的 mjcf/mujoco.yaml 一致；不用于启动仿真器。
-master:
-  id: 0
-  cycle: 1000  # 微秒，对应仿真器 cycle_time_us
-  state: op
