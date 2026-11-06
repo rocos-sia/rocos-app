@@ -25,6 +25,11 @@
 
 namespace rocos {
 namespace {
+// App 显式指定预算，不依赖 pin_ik 子模块的默认值。
+constexpr auto kIkTimeBudget = std::chrono::milliseconds(1);
+constexpr double kIkTimeoutSeconds =
+    std::chrono::duration<double>(kIkTimeBudget).count();
+
 Result failure(Result result) {
   emitLogEvent(LogEventType::Result, LogModule::Model,
                static_cast<int>(result));
@@ -175,7 +180,8 @@ struct Model::Impl {
     if (coupled)
       coupled_ik_data = std::make_unique<pinocchio::Data>(model);
     else
-      ik = std::make_unique<PIN_IK::PIN_IK>(model, lower.data, upper.data, tip);
+      ik = std::make_unique<PIN_IK::PIN_IK>(model, lower.data, upper.data, tip,
+                                           kIkTimeoutSeconds);
     configuration.setZero(model.nq);
     jacobian.setZero(6, model.nv);
     external.resize(model.njoints, pinocchio::Force::Zero());
@@ -191,7 +197,7 @@ struct Model::Impl {
     }
     const Eigen::VectorXd initial = reduction * seed.data;
     const auto deadline =
-        std::chrono::steady_clock::now() + std::chrono::milliseconds(5);
+        std::chrono::steady_clock::now() + kIkTimeBudget;
     auto residual = [&](const Eigen::VectorXd& q) {
       pinocchio::forwardKinematics(model, *coupled_ik_data, toConfiguration(q));
       pinocchio::updateFramePlacements(model, *coupled_ik_data);
@@ -437,7 +443,7 @@ void Model::SetPosLimits(const JntArray& lower, const JntArray& upper) {
   std::unique_ptr<PIN_IK::PIN_IK> next;
   if (!impl_->coupled)
     next = std::make_unique<PIN_IK::PIN_IK>(impl_->model, lo.data, hi.data,
-                                            impl_->tip);
+                                            impl_->tip, kIkTimeoutSeconds);
   q_min_ = lo;
   q_max_ = hi;
   impl_->ik = std::move(next);
@@ -446,7 +452,8 @@ void Model::UpdateSolvers() {
   std::scoped_lock lock(impl_->ik_mutex, impl_->compute_mutex);
   if (!impl_->coupled)
     impl_->ik = std::make_unique<PIN_IK::PIN_IK>(impl_->model, q_min_.data,
-                                               q_max_.data, impl_->tip);
+                                               q_max_.data, impl_->tip,
+                                               kIkTimeoutSeconds);
 }
 
 Result Model::ApplyPositionCoupling(JntArray& q) const {

@@ -18,6 +18,8 @@
 // email: luoyang@sia.cn
 #pragma once
 
+#include "servo_settings.hpp"
+
 #include <string>
 #include <vector>
 
@@ -70,10 +72,30 @@ class ModelInterface {
     return empty;
   }
 
+  // 位置/额定速度来自当前模型（URDF 或显式收紧后的限位）。
+  // deceleration > 0，velocity_offset >= 0，单位与模型关节一致。
+  // 纯计算，不修改模型；任何失败均保留输出。越界位置不能被静默钳位。
+  Result GetPositionVelocityLimits(const JntArray& position,
+                                   const JntArray& deceleration,
+                                   const JntArray& velocity_offset,
+                                   JntArray& lower_velocity,
+                                   JntArray& upper_velocity) const;
+
   virtual const JntArray& GetEffortLimit() const {
     static const JntArray empty;
     return empty;
   }
+
+  // 逐周期限速与制动可行性；只依赖模型限位和显式导数配置。
+  Result LimitServoJointStep(unsigned int axis, double desired_velocity,
+                            const ServoJointState& previous, const JointDerivativeLimits& limits,
+                            double dt, ServoJointState& next) const;
+  Result LimitServoPositionStep(unsigned int axis, double target,
+                               const ServoJointState& previous, const JointDerivativeLimits& limits,
+                               double dt, ServoJointState& next) const;
+  Result MakeServoBrake(unsigned int axis, const ServoJointState& state,
+                        const JointDerivativeLimits& limits, double dt, ServoBrake& brake) const;
+
 
 };
 }  // namespace rocos

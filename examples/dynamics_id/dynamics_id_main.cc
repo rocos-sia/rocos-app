@@ -61,7 +61,14 @@ void run(Hardware& hardware, const ExcitationTrajectory& trajectory, Samples& sa
     require(state.dq.cwiseAbs().maxCoeff() <= 0.02, "Robot must be stationary before enabling");
     JntArray target(trajectory.names.size());
     target.data = state.q;
-    hardware.SetPosition(target);
+    JntArray lastSent = target;
+    auto sendPosition = [&] {
+        validatePositionCommand(target, lastSent, trajectory.drives, trajectory.velocity,
+                                hardware.GetDt() * 1e-6);
+        hardware.SetPosition(target);
+        lastSent = target;
+    };
+    sendPosition();
     cycle.wait();
     checkSignal();
     hardware.SetEnabled();
@@ -87,13 +94,13 @@ void run(Hardware& hardware, const ExcitationTrajectory& trajectory, Samples& sa
         const double u = std::clamp(elapsed / approach, 0.0, 1.0);
         const double blend = u * u * u * (10 + u * (-15 + 6 * u));
         target.data = start + blend * (trajectory.centers - start);
-        hardware.SetPosition(target);
+        sendPosition();
     } while (elapsed < approach);
 
     epoch = Clock::now();
     do {
         feedback();
-        hardware.SetPosition(target);
+        sendPosition();
     } while (std::chrono::duration<double>(Clock::now() - epoch).count() < 0.2);
     require(state.dq.cwiseAbs().maxCoeff() <= 0.02, "Robot did not settle at trajectory start");
 
@@ -109,13 +116,13 @@ void run(Hardware& hardware, const ExcitationTrajectory& trajectory, Samples& sa
                            state);
             t = std::chrono::duration<double>(now - loopStart).count() * FLAGS_time_scale;
             trajectory.evaluate(t, FLAGS_time_scale, target);
-            hardware.SetPosition(target);
+            sendPosition();
         } while (t < trajectory.duration);
     }
     epoch = Clock::now();
     do {
         feedback();
-        hardware.SetPosition(target);
+        sendPosition();
     } while (std::chrono::duration<double>(Clock::now() - epoch).count() < 0.2);
     require(state.dq.cwiseAbs().maxCoeff() <= 0.02, "Robot did not settle at trajectory end");
     guard.stop();

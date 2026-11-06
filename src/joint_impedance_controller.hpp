@@ -66,6 +66,8 @@ private:
     HardwareInterface* hardware_{nullptr};
     ModelInterface* model_{nullptr};
     bool mode_set_{false};
+    JntArray last_torque_;
+    bool has_last_torque_{false};
 
     JntArray K_p_;           // 刚度系数 [Nm/rad]
     JntArray K_d_;           // 阻尼系数 [Nm·s/rad]

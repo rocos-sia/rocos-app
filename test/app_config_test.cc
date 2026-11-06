@@ -476,3 +476,31 @@ TEST_CASE_FIXTURE(ConfigFixture, "ECM v2 command deadline is validated and expor
         CHECK_THROWS(rocos::AppConfig::load(entry.string()));
     }
 }
+
+TEST_CASE_FIXTURE(ConfigFixture, "Servo defaults and robot overrides round trip in effective configuration") {
+    const auto entry = composed();
+    auto config = rocos::AppConfig::load(entry.string());
+    CHECK(config.robot.servo.lowpass_enabled);
+    CHECK(config.robot.servo.rate_limit_enabled);
+    CHECK(config.robot.servo.communication_guard_enabled);
+    CHECK(config.effective["robot"]["servo"]["cutoff_hz"].as<double>() == 100);
+    overrideWith("robot:\n  servo:\n    cutoff_hz: 40\n    max_missing_cycles: 12\n    low_quality_cycles: 50\n    minimum_success_rate: 0.95\n");
+    config = rocos::AppConfig::load(entry.string());
+    CHECK(config.robot.servo.cutoff_hz == 40);
+    CHECK(config.robot.servo.max_missing_cycles == 12);
+    CHECK(config.robot.servo.low_quality_cycles == 50);
+    CHECK(config.robot.servo.minimum_success_rate == .95);
+    const auto exported = directory / "export-servo";
+    config.exportConfiguration(exported.string());
+    const auto snapshot = YAML::LoadFile((exported / "effective.yaml").string());
+    const auto restored = rocos::LoadServoSettings(snapshot["robot"]["servo"]);
+    CHECK(restored.cutoff_hz == 40);
+    CHECK(restored.max_missing_cycles == 12);
+}
+
+TEST_CASE("Servo configuration rejects unknown, nonfinite and unsafe range settings") {
+    for (const auto* yaml : {"cutoff_hz: .nan", "cutoff_hz: 0", "minimum_success_rate: 1.1",
+                            "max_missing_cycles: -1", "low_quality_cycles: 0", "typo: true"}) {
+        CHECK_THROWS(rocos::LoadServoSettings(YAML::Load(yaml)));
+    }
+}

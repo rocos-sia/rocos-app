@@ -30,6 +30,7 @@
 #include "types.hpp"
 #include "result.hpp"
 #include "servo_type.hpp"
+#include "servo_session.hpp"
 #include "logger.hpp"
 #include "frame_registry.hpp"
 
@@ -109,6 +110,7 @@ class Robot {
   };
 
   struct Config {
+    ServoSettings servo;
     std::string hardware_config{"hardware_talon_config.yaml"};
     int ecat_id{0};
     std::string urdf{"robot.urdf"};
@@ -229,7 +231,16 @@ class Robot {
   Result MoveSvdJogging(const std::vector<double>& dim_speeds,
                           double timeout = 0.1, double dir_threshold = 0.99);
 
-  Result MoveServoing(uint16_t port = 8081);
+  // RCI 开关独立于运动状态；接入时自动建立独占 UDP 会话。
+  Result EnableRci();
+  Result DisableRci();
+  Result StartRciControl(std::shared_ptr<ServoSession>& session,
+                         uint16_t port = 8081, const std::string& mode = "joint");
+  Result StopRciControl();
+  bool IsRciEnabled() const { return rci_enabled_.load(); }
+  nlohmann::json GetRciStatus() const;
+
+  Result MoveServoing(uint16_t port = 8081, std::shared_ptr<ServoSession> session = nullptr);
 
   /// @brief 设置伺服运动模式（joint / cartesian），可在启动前或运行中调用
   Result SetServoMode(const std::string& mode_str);
@@ -379,6 +390,8 @@ class Robot {
   inline double getJointSecondaryPositionInCnt(int id) { return 0.0; }
 
   inline void setJointPosition(int id, double pos) {
+    auto command_lock = LockToolState();
+    if (IsRciEnabled()) return;
     if (!hardware || id < 0) return;
     auto q = hardware->GetPosition();
     if (static_cast<unsigned int>(id) >= q.rows()) return;
@@ -387,6 +400,8 @@ class Robot {
   }
 
   inline void setJointVelocity(int id, double vel) {
+    auto command_lock = LockToolState();
+    if (IsRciEnabled()) return;
     if (!hardware || id < 0) return;
     auto q_dot = hardware->GetVelocity();
     if (static_cast<unsigned int>(id) >= q_dot.rows()) return;
@@ -395,6 +410,8 @@ class Robot {
   }
 
   inline void setJointTorque(int id, double tor) {
+    auto command_lock = LockToolState();
+    if (IsRciEnabled()) return;
     if (!hardware || id < 0) return;
     auto tau = hardware->GetTorque();
     if (static_cast<unsigned int>(id) >= tau.rows()) return;
@@ -428,6 +445,13 @@ class Robot {
 
  private:
 
+  friend class LuaScriptEngine;
+  std::atomic<bool> script_active_{false};
+  std::atomic<bool> rci_enabled_{false}, rci_closing_{false}, rci_active_{false};
+  Result StartServo(uint16_t port, std::shared_ptr<ServoSession> session);
+  nlohmann::json last_servo_status_; // FSM 锁保护，会话销毁后仍可查询终态。
+  void FinishRciControl();  // 由持有 FSM 锁的停止/故障回调调用
+
   Result ComputeFlangePose(const JntArray& joints, Frame& flange) const;
   Result ReadFlangePose(Frame& flange) const;
   // void controlLoop();                        // 控制线程函数
@@ -435,6 +459,10 @@ class Robot {
   void stopControlThread();
   void joinControlThreadIfJoinable();
   void jointBinding();
+  std::thread watchdog_thread_;
+  std::atomic<bool> watchdog_running_{false}, servo_watchdog_armed_{false};
+  std::atomic<bool> control_thread_alive_{false};
+  std::atomic<int64_t> last_control_progress_ns_{0};
   std::thread control_thread_;               // 控制线程句柄
   mutable std::mutex mtx_;
   std::mutex preview_mutex_;
@@ -453,6 +481,7 @@ class Robot {
   bool load_params_overridden_{false};
   std::string urdf_path_{"robot.urdf"};
 
+  ServoSettings servo_settings_;
   MotionMode servo_mode_{MotionMode::kJointPosition};  // 伺服运动模式: kJointPosition | kCartesianPosition
 
   //// Joint binding

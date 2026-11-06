@@ -76,6 +76,10 @@ struct Drive {
         double vel = 3.0;              // 最大速度
         double acc = 10.0;             // 最大加速度
         double jerk = 150.0;           // 最大加加速度
+        double deceleration = 0.0;     // 0: 使用 acc；必须按机器人核定
+        double torque_rate = 200.0;   // Nm/s 或 N/s
+        double following_error = 0.0; // 0: 额定速度 × 20 个控制周期
+        double velocity_offset = 0.0; // 位置相关速度包络的偏置
         double effort = 30.0;          // 最大力矩/力
     } limit;
 
@@ -176,6 +180,12 @@ public:
     /// @param yaml_file_path 硬件描述 YAML 文件路径
     /// @param ecat_id         EtherCAT 主站 ID（默认 0）
     /// @param cycle_timeout_ms 周期等待超时；0 保持原有无限等待行为。
+    void ConfigureCycleTimeout(uint32_t cycles);
+    Result ReadFeedbackSnapshot(FeedbackSnapshot& snapshot) override;
+    Result CheckFeedbackFreshness(uint64_t max_age_us) const override;
+    OutputSnapshot GetOutputSnapshot() const override;
+    void RequestSafetyStop() noexcept override;
+    bool SafetyStopRequested() const override { return safety_stop_.load(); }
     explicit Hardware(const std::string& yaml_file_path, int ecat_id = 0, uint32_t cycle_timeout_ms = 0);
     explicit Hardware(const HardwareConfig& config, int ecat_id = 0, uint32_t cycle_timeout_ms = 0);
     ~Hardware();
@@ -253,12 +263,18 @@ public:
     /// @brief 获取硬件类型
     HardwareType getHardwareType(int32_t slave_id) const;
 
+    std::vector<JointDerivativeLimits> GetJointDerivativeLimits() const override;
+
     /// @brief [测试用] 从 YAML 文件加载并返回配置，不初始化 EcatConfig
     static HardwareConfig LoadConfigFromYAML(const std::string& yaml_file_path);
     static HardwareConfig LoadConfigFromNode(const YAML::Node& root);
 
 private:
     uint32_t cycle_timeout_ms_ = 0;
+    std::atomic<bool> safety_stop_{false};
+    mutable std::mutex output_mutex_;
+    OutputSnapshot output_snapshot_;
+
     struct MimicDrive {
         int32_t id;
         int32_t source_id;

@@ -24,8 +24,8 @@ inline Result ValidateJointCommand(const ModelInterface& model,
         return Result::UnmatchedJointsNumber;
     if (!std::isfinite(dt) || dt <= 0) return Result::IllegalParameter;
     for (unsigned int i = 0; i < n; ++i) {
-        if (!std::isfinite(q(i)) || !std::isfinite(lower(i)) ||
-            !std::isfinite(upper(i)) || !std::isfinite(velocity(i)) ||
+        if (!std::isfinite(q(i)) || std::isnan(lower(i)) || lower(i) == INFINITY ||
+            std::isnan(upper(i)) || upper(i) == -INFINITY || !std::isfinite(velocity(i)) ||
             (previous && !std::isfinite((*previous)(i))))
             return Result::ParameterNanOrInf;
         if (q(i) < lower(i) || q(i) > upper(i)) {
@@ -33,7 +33,7 @@ inline Result ValidateJointCommand(const ModelInterface& model,
                 *violation = {static_cast<int>(i), q(i), lower(i), upper(i)};
             return Result::PosLimit;
         }
-        if (velocity(i) < 0) return Result::IllegalParameter;
+        if (lower(i) > upper(i) || velocity(i) < 0) return Result::IllegalParameter;
         if (previous && std::abs(q(i) - (*previous)(i)) / dt > velocity(i)) {
             if (violation)
                 *violation = {static_cast<int>(i),

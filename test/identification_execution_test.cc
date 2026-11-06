@@ -24,6 +24,7 @@ struct OfflineMaster {
     const std::filesystem::path directory =
         std::filesystem::temp_directory_path() / ("rocos-identification-" + std::to_string(id));
     bool enabled = false, positionMoved = false, torqueWritten = false;
+    std::vector<int32_t> targetsBeforeGap;
 
     OfflineMaster() {
         REQUIRE(std::filesystem::create_directory(directory));
@@ -58,7 +59,7 @@ struct OfflineMaster {
         v.offset = offset;
         v.size = size;
     }
-    int run(bool impedance, bool loseCycles = false) {
+    int run(bool impedance, bool loseCycles = false, bool delayPositionCycle = false) {
         const std::string output = (directory / "measurements.csv").string();
         std::vector<std::string> args;
         if (impedance) {
@@ -107,6 +108,12 @@ struct OfflineMaster {
                 }
             }
             if (enabled) ++activeCycles;
+            if (delayPositionCycle && activeCycles == 200) {
+                // 小于 max_cycle_gap，但墙钟轨迹推进将产生超速步进。
+                std::this_thread::sleep_for(std::chrono::milliseconds(60));
+                for (int i = 0; i < 2; ++i)
+                    targetsBeforeGap.push_back(master.getSlaveOutputVarValue<int32_t>(i, 2));
+            }
             if (!loseCycles || activeCycles < 10) REQUIRE(master.notifyClients());
             if (std::chrono::steady_clock::now() - start > std::chrono::seconds(12)) {
                 kill(child, SIGKILL);
@@ -174,6 +181,22 @@ TEST_CASE_FIXTURE(OfflineMaster, "Hardware-only impedance preloads and writes CS
         }
     }
     CHECK(checked);
+}
+
+TEST_CASE_FIXTURE(OfflineMaster,
+                  "Position step violation rejects PDO writes and disables acquisition") {
+    // joint_1 从 0.5 rad 过渡到中心，避开零位静止过渡。
+    master.setSlaveInputVarValue<int32_t>(0, 1, 101000);
+    REQUIRE(run(false, false, true) == 1);
+    CHECK(enabled);
+    REQUIRE(targetsBeforeGap.size() == 2);
+    for (int i = 0; i < 2; ++i)
+        CHECK(master.getSlaveOutputVarValue<int32_t>(i, 2) == targetsBeforeGap[i]);
+    const auto meta = YAML::LoadFile((directory / "measurements.csv.meta.yaml").string());
+    CHECK_FALSE(meta["completed"].as<bool>());
+    CHECK(meta["failure"].as<std::string>().find("Command velocity limit exceeded: joint_1") !=
+          std::string::npos);
+    CHECK(std::filesystem::exists(directory / "measurements.csv"));
 }
 
 TEST_CASE_FIXTURE(OfflineMaster, "Missing feedback PDO is rejected before enabling") {

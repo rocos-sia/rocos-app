@@ -18,6 +18,7 @@
 // email: luoyang@sia.cn
 
 #include "position_controller.hpp"
+#include "feedback_validation.hpp"
 #include "position_command_validation.hpp"
 #include "log_manager.hpp"
 
@@ -27,9 +28,13 @@
 namespace rocos {
 
 PositionController::~PositionController() {
-    if (hardware_ != nullptr) {
-        hardware_->WaitForSignal();
-        static_cast<void>(UpdateCmd(hardware_->GetPosition()));
+    try {
+        if (hardware_ && !hardware_->SafetyStopRequested()) {
+            hardware_->WaitForSignal();
+            static_cast<void>(UpdateCmd(hardware_->GetPosition()));
+        }
+    } catch (...) {
+        if (hardware_) hardware_->RequestSafetyStop();
     }
 }
 
@@ -157,11 +162,12 @@ Result PositionController::ValidatePositionCommand(const JntArray& q_cmd) {
         return Result::ParameterPointerEqualsNullptr;
     }
 
-    const JntArray q_actual = hardware_->GetPosition();
-    if (q_actual.rows() != static_cast<unsigned int>(model_->GetJointNum()))
-        return Result::UnmatchedJointsNumber;
-    for (unsigned int i = 0; i < q_actual.rows(); ++i)
-        if (!std::isfinite(q_actual(i))) return Result::ParameterNanOrInf;
+    FeedbackSnapshot sample;
+    auto feedback_result=hardware_->ReadFeedbackSnapshot(sample);
+    if (feedback_result==Result::NoError)
+        feedback_result=ValidateFeedback(*model_,*hardware_,sample,has_last_cmd_?&q_last_cmd_:nullptr);
+    if (feedback_result!=Result::NoError) { hardware_->RequestSafetyStop(); return feedback_result; }
+    const auto& q_actual=sample.position;
     const double dt = static_cast<double>(hardware_->GetDt()) / 1'000'000.0;
     const auto* previous = has_last_cmd_ && q_last_cmd_.rows() == q_cmd.rows()
         ? &q_last_cmd_ : nullptr;

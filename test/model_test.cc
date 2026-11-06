@@ -565,3 +565,67 @@ TEST_CASE("Model - ParseUrdf with talon robot") {
         }
     }
 }
+
+TEST_CASE("Model position velocity envelope uses URDF and directional braking parameters") {
+    ModelFile file(pendulum);
+    rocos::Model model(file.path.string(), "base", "tip");
+    rocos::JntArray q(1), dec(1), offset(1), lower, upper;
+    dec(0) = 2;
+    offset(0) = 0.1;
+    REQUIRE(model.GetPositionVelocityLimits(q, dec, offset, lower, upper) == rocos::Result::NoError);
+    CHECK(lower(0) == doctest::Approx(-1.9));
+    CHECK(upper(0) == doctest::Approx(1.9));
+    q(0) = 0.99;
+    REQUIRE(model.GetPositionVelocityLimits(q, dec, offset, lower, upper) == rocos::Result::NoError);
+    CHECK(upper(0) == doctest::Approx(0.1));
+    CHECK(lower(0) == -2);
+    q(0) = 1;
+    REQUIRE(model.GetPositionVelocityLimits(q, dec, offset, lower, upper) == rocos::Result::NoError);
+    CHECK(upper(0) == 0);
+    CHECK(lower(0) == -2);
+    q(0) = -1;
+    REQUIRE(model.GetPositionVelocityLimits(q, dec, offset, lower, upper) == rocos::Result::NoError);
+    CHECK(lower(0) == 0);
+    CHECK(upper(0) == 2);
+    SUBCASE("invalid position preserves outputs") {
+        q(0) = 1.1;
+        CHECK(model.GetPositionVelocityLimits(q, dec, offset, lower, upper) == rocos::Result::PosLimit);
+        CHECK(lower(0) == 0);
+        CHECK(upper(0) == 2);
+    }
+    SUBCASE("negative braking rejected") {
+        dec(0) = -1;
+        CHECK(model.GetPositionVelocityLimits(q, dec, offset, lower, upper) == rocos::Result::IllegalParameter);
+    }
+    SUBCASE("nonfinite rejected") {
+        q(0) = std::numeric_limits<double>::quiet_NaN();
+        CHECK(model.GetPositionVelocityLimits(q, dec, offset, lower, upper) == rocos::Result::ParameterNanOrInf);
+    }
+    SUBCASE("dimension mismatch rejected") {
+        offset.resize(2);
+        CHECK(model.GetPositionVelocityLimits(q, dec, offset, lower, upper) == rocos::Result::UnmatchedJointsNumber);
+    }
+    SUBCASE("explicit model limits are honored") {
+        rocos::JntArray lo(1), hi(1);
+        lo(0) = -0.5;
+        hi(0) = 0.5;
+        model.SetPosLimits(lo, hi);
+        q(0) = 0.49;
+        REQUIRE(model.GetPositionVelocityLimits(q, dec, offset, lower, upper) == rocos::Result::NoError);
+        CHECK(upper(0) == doctest::Approx(0.1));
+    }
+}
+
+TEST_CASE("Continuous URDF joints have nominal bidirectional velocity without artificial position boundaries") {
+    auto xml = std::string(pendulum);
+    xml.replace(xml.find("type=\"revolute\""), std::string("type=\"revolute\"").size(), "type=\"continuous\"");
+    ModelFile file(xml);
+    rocos::Model model(file.path.string(), "base", "tip");
+    rocos::JntArray q(1), dec(1), offset(1), lo, hi;
+    q(0) = 100;
+    dec(0) = 2;
+    offset(0) = .1;
+    REQUIRE(model.GetPositionVelocityLimits(q, dec, offset, lo, hi) == rocos::Result::NoError);
+    CHECK(lo(0) == -2);
+    CHECK(hi(0) == 2);
+}

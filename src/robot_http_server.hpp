@@ -78,6 +78,13 @@ private:
     void handleGetLoadParameters(const httplib::Request& req, httplib::Response& res);
     void handleSaveLoadParameters(const httplib::Request& req, httplib::Response& res);
 
+    // ---- RCI ----
+    void handleRciEnable(const httplib::Request& req, httplib::Response& res);
+    void handleRciDisable(const httplib::Request& req, httplib::Response& res);
+    void handleRciStart(const httplib::Request& req, httplib::Response& res);
+    void handleRciStop(const httplib::Request& req, httplib::Response& res);
+    void handleRciStatus(const httplib::Request& req, httplib::Response& res);
+
     // ---- Servo Control ----
     void handleServoStart(const httplib::Request& req, httplib::Response& res);
     void handleServoStop(const httplib::Request& req, httplib::Response& res);
@@ -225,6 +232,7 @@ private:
 
     // ---- Control Rights state ----
     mutable std::mutex control_mutex_;
+    std::shared_ptr<ServoSession> servo_session_;
     std::string current_token_;        // 空串 = 无持有者
     std::string current_owner_ip_;
     int current_owner_port_ = -1;

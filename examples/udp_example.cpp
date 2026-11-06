@@ -6,14 +6,14 @@
  * 示例: udp_example localhost 8080 8081
  *
  * 工作流程:
- *   1. 通过 HTTP POST /api/robot/servo/start 启动伺服模式
- *   2. 通过 HTTP POST /api/robot/servo/mode 设置为关节空间模式
+ *   1. 查询 RCI；若未开启，自动申请普通 HTTP 控制权并开启 RCI
+ *   2. 无额外凭据接入 RCI，自动取得 UDP 会话 ID（关节空间）
  *   3. 通过 UDP 以 1kHz 发送 MotionGeneratorCommand，接收 RobotState
  *   4. 每秒输出通信统计（实际频率、RTT、丢包率、服务器成功率）
  *   5. 收到 SIGINT 后通过 HTTP 停止伺服模式并安全退出
  *
  * 前置条件:
- *   - rocosAppMain 已启动（默认 --http_port=8080 --sim=true）
+ *   - rocosAppMain 已启动（使用已准备好的硬件或离线模拟主站配置）
  *   - 机械臂已 enable: curl -X POST localhost:8080/api/robot/enable
  */
 
@@ -26,6 +26,7 @@
 #include <cmath>
 #include <csignal>
 #include <cstring>
+#include <cstdlib>
 #include <iomanip>
 #include <iostream>
 #include <string>
@@ -76,26 +77,53 @@ int main(int argc, char* argv[]) {
     // ---- Step 1: 通过 HTTP 启动伺服模式 ----
     httplib::Client http(host, http_port);
     http.set_connection_timeout(5);
-
-
-    // ---- Step 2: 设置伺服模式为关节空间 ----
-    {
-        nlohmann::json body;
-        body["mode"] = "joint";
-        auto res = http.Post("/api/robot/servo/mode",
-                             body.dump(), "application/json");
-        if (res) {
-          auto json = nlohmann::json::parse(res->body);
-          std::cout << "[INFO] ✓ 伺服模式: "
-                    << json.value("message", "") << "\n";
+    http.set_read_timeout(5);
+    std::array<uint8_t, 16> servo_session{};
+    const auto status_response = http.Get("/api/robot/rci/status");
+    if (!status_response) {
+        std::cerr << "[ERROR] 无法查询 RCI 状态\n";
+        return 1;
+    }
+    const auto status = nlohmann::json::parse(status_response->body);
+    if (!status.value("success", false)) {
+        std::cerr << "[ERROR] RCI 状态不可用\n";
+        return 1;
+    }
+    if (!status["data"].value("enabled", false)) {
+        const std::string client_id = "udp-example-" + std::to_string(getpid());
+        const nlohmann::json request = {{"client_id", client_id},
+                                        {"client_name", "UDP example"}};
+        const auto acquired = http.Post("/api/control/acquire", request.dump(),
+                                        "application/json");
+        if (!acquired) return 1;
+        const auto owner = nlohmann::json::parse(acquired->body);
+        if (!owner.value("success", false)) {
+            std::cerr
+                << "[ERROR] 已有其他控制者，请由上位机开启 RCI 后再连接\n";
+            return 1;
+        }
+        const httplib::Headers headers = {
+            {"X-Rocos-Control-Token",
+             owner["data"]["token"].get<std::string>()},
+            {"X-Rocos-Client-Id", client_id}};
+        const auto enabled = http.Post("/api/robot/rci/enable", headers, "{}",
+                                       "application/json");
+        // RCI 接入与 HTTP 租约独立，程序无需续期上位机控制权。
+        http.Post("/api/control/release", headers, "{}", "application/json");
+        if (!enabled ||
+            !nlohmann::json::parse(enabled->body).value("success", false)) {
+            std::cerr << "[ERROR] 开启 RCI "
+                         "失败，请确认机器人已使能、停止且没有运行脚本\n";
+            return 1;
         }
     }
 
     {
         nlohmann::json body;
         body["port"] = udp_port;
-        auto res = http.Post("/api/robot/servo/start",
-                             body.dump(), "application/json");
+        body["mode"] = "joint";
+        auto res =
+            http.Post("/api/robot/rci/start", body.dump(), "application/json");
 
         if (!res) {
             std::cerr << "[ERROR] HTTP 连接失败 — rocosAppMain 是否已启动？\n";
@@ -112,28 +140,23 @@ int main(int argc, char* argv[]) {
                       << "/api/robot/enable\n";
             return 1;
         }
-        std::cout << "[INFO] ✓ 伺服模式已启动, 端口="
-                  << json["data"]["port"] << "\n";
-    }
-
-    // ---- Step 2: 设置伺服模式为关节空间 ----
-    {
-        nlohmann::json body;
-        body["mode"] = "joint";
-        auto res = http.Post("/api/robot/servo/mode",
-                             body.dump(), "application/json");
-        if (res) {
-            auto json = nlohmann::json::parse(res->body);
-            std::cout << "[INFO] ✓ 伺服模式: "
-                      << json.value("message", "") << "\n";
-        }
+        if (json["data"].value("protocol_version", 0) != SERVO_PROTOCOL_VERSION)
+            return 1;
+        const auto session_hex =
+            json["data"].value("session_id", std::string{});
+        if (session_hex.size() != 32) return 1;
+        for (size_t i = 0; i < servo_session.size(); ++i)
+            servo_session[i] = static_cast<uint8_t>(
+                std::stoul(session_hex.substr(i * 2, 2), nullptr, 16));
+        std::cout << "[INFO] ✓ 伺服模式已启动, 端口=" << json["data"]["port"]
+                  << "\n";
     }
 
     // ---- Step 3: 初始化 UDP socket ----
     int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
     if (sockfd < 0) {
         std::cerr << "[ERROR] 无法创建 UDP socket\n";
-        http.Post("/api/robot/servo/stop", "", "application/json");
+        http.Post("/api/robot/rci/stop", "", "application/json");
         return 1;
     }
 
@@ -148,7 +171,7 @@ int main(int argc, char* argv[]) {
                          &server_addr.sin_addr) != 1) {
         std::cerr << "[ERROR] 无法解析主机名: " << host << "\n";
         close(sockfd);
-        http.Post("/api/robot/servo/stop", "", "application/json");
+        http.Post("/api/robot/rci/stop", "", "application/json");
         return 1;
     }
 
@@ -157,12 +180,13 @@ int main(int argc, char* argv[]) {
                 sizeof(server_addr)) < 0) {
         std::cerr << "[ERROR] UDP connect 失败\n";
         close(sockfd);
-        http.Post("/api/robot/servo/stop", "", "application/json");
+        http.Post("/api/robot/rci/stop", "", "application/json");
         return 1;
     }
 
     // ---- Step 4: 获取初始机器人状态（先用长超时探测，再恢复短超时）----
     MotionGeneratorCommand cmd{};
+    cmd.session_id=servo_session;
     RobotState             state{};
 
     // 探测阶段：超时设 200ms，等待 UDP 线程就绪并回包
@@ -200,7 +224,7 @@ int main(int argc, char* argv[]) {
     } else {
         std::cerr << "[ERROR] 探测失败：无法获取初始关节位置，请检查伺服是否正常启动\n";
         close(sockfd);
-        http.Post("/api/robot/servo/stop", "", "application/json");
+        http.Post("/api/robot/rci/stop", "", "application/json");
         return 1;
     }
 
@@ -391,7 +415,7 @@ int main(int argc, char* argv[]) {
     close(sockfd);
 
     {
-        auto res = http.Post("/api/robot/servo/stop",
+        auto res = http.Post("/api/robot/rci/stop",
                              "", "application/json");
         if (res) {
             auto json = nlohmann::json::parse(res->body);

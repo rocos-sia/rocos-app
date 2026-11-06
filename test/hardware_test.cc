@@ -477,3 +477,16 @@ TEST_CASE("Hardware YAML - torque_source 解析") {
         CHECK(config.drives[0].torque_source == rocos::TorqueSource::LoadTorque);
     }
 }
+
+TEST_CASE("Hardware YAML imports configurable servo braking parameters") {
+    const auto file = writeTmpYaml(R"(
+hardware:
+  - {type: driver, id: 7, joint_name: axis, limit: {acc: 2, jerk: 20, deceleration: 1.5, velocity_offset: 0.03}}
+)");
+    const auto config = rocos::Hardware::LoadConfigFromYAML(file);
+    REQUIRE(config.drives.size() == 1);
+    CHECK(config.drives[0].limit.acc == 2);
+    CHECK(config.drives[0].limit.jerk == 20);
+    CHECK(config.drives[0].limit.deceleration == doctest::Approx(1.5));
+    CHECK(config.drives[0].limit.velocity_offset == doctest::Approx(.03));
+}

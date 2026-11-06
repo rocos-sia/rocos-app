@@ -19,15 +19,25 @@
 #pragma once
 
 #include <cstdint>
+#include <chrono>
 #include <vector>
 
 #include "drive_interface.hpp"
 #include "ft_sensor_interface.hpp"
 #include "io_inteface.hpp"
 #include "result.hpp"
+#include "servo_settings.hpp"
 
 namespace rocos {
 
+struct FeedbackSnapshot {
+  JntArray position, velocity, torque, load;
+  uint64_t sample_time_ns{0}, source_time_us{0};
+};
+struct OutputSnapshot {
+  JntArray position, torque;
+  int8_t mode{0};
+};
 class HardwareInterface : public DriveInterface,
                           public FTSensorInterface,
                           public IOInteface {
@@ -42,6 +52,17 @@ class HardwareInterface : public DriveInterface,
   }
 
   virtual void WaitForSignal() = 0;
+  virtual Result ReadFeedbackSnapshot(FeedbackSnapshot& s) {
+    s.position=GetPosition(); s.velocity=GetVelocity(); s.torque=GetTorque(); s.load=GetLoadTorque();
+    s.sample_time_ns=std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    return Result::NoError;
+  }
+  virtual Result CheckFeedbackFreshness(uint64_t) const { return Result::NoError; }
+  virtual OutputSnapshot GetOutputSnapshot() const { return {}; }
+  virtual void RequestSafetyStop() noexcept { try { SetDisabled(); } catch (...) {} }
+  virtual bool SafetyStopRequested() const { return false; }
+
 
   /// @brief Control cycle period from shared memory, unit: microseconds.
   ///        1 kHz -> 1000. Master (mujoco/ecm) writes EcatBus::dt; app reads it.
@@ -52,6 +73,11 @@ class HardwareInterface : public DriveInterface,
   // 位置控制器在限位/速度检查前应用硬件联动约束。
   virtual Result ApplyPositionCoupling(JntArray& /*q*/) const {
     return Result::NoError;
+  }
+
+  // 按 model index 返回配置；空值表示该硬件未提供伺服导数限制。
+  virtual std::vector<JointDerivativeLimits> GetJointDerivativeLimits() const {
+    return {};
   }
 
   /// @brief 设置 model index → drive id 映射表（建模层到硬件层的轴绑定）

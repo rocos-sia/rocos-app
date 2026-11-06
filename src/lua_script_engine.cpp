@@ -220,11 +220,14 @@ struct LuaScriptEngine::Impl {
 
     Result Run() {
         std::lock_guard<std::mutex> lifecycle_lock_(lifecycle_mutex_);
+        auto command_lock = robot_.LockToolState();
+        if (robot_.IsRciEnabled()) return Result::ConflictTaskRunning;
         {
             std::lock_guard<std::mutex> lock(mutex_);
             if (state_ != State::Loaded) {
                 return Result::LuaStateConflict;
             }
+            if (robot_.script_active_) return Result::ConflictTaskRunning;
             state_ = State::Running;
             stop_requested_ = false;
             pause_requested_ = false;
@@ -232,9 +235,11 @@ struct LuaScriptEngine::Impl {
             step_started_ = false;
         }
 
+        robot_.script_active_ = true;
         try {
             worker_ = std::thread(&Impl::execute, this);
         } catch (const std::system_error& exception_) {
+            robot_.script_active_ = false;
             std::lock_guard<std::mutex> lock(mutex_);
             state_ = State::Loaded;
             error_ = exception_.what();
@@ -344,11 +349,14 @@ struct LuaScriptEngine::Impl {
 
     Result Step() {
         std::lock_guard<std::mutex> lifecycle_lock_(lifecycle_mutex_);
+        auto command_lock = robot_.LockToolState();
+        if (robot_.IsRciEnabled()) return Result::ConflictTaskRunning;
         bool motion_active_ = false;
         bool start_worker_ = false;
         {
             std::lock_guard<std::mutex> lock(mutex_);
             if (state_ == State::Loaded) {
+                if (robot_.script_active_) return Result::ConflictTaskRunning;
                 state_ = State::Running;
                 stop_requested_ = false;
                 pause_requested_ = false;
@@ -364,9 +372,11 @@ struct LuaScriptEngine::Impl {
         }
 
         if (start_worker_) {
+            robot_.script_active_ = true;
             try {
                 worker_ = std::thread(&Impl::execute, this);
             } catch (const std::system_error& exception_) {
+                robot_.script_active_ = false;
                 std::lock_guard<std::mutex> lock(mutex_);
                 state_ = State::Loaded;
                 step_mode_ = false;
@@ -880,6 +890,7 @@ private:
                 Logger::logCode(LogLevel::Error, "LuaScriptEngine", static_cast<int>(Result::LuaExecutionError), "Lua script execution failed: {}", error_);
             }
         }
+        robot_.script_active_ = false;
         control_cv_.notify_all();
     }
 

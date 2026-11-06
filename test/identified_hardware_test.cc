@@ -47,6 +47,47 @@ TEST_CASE("Hardware bindings reject ambiguous names and unrelated drives") {
     CHECK_THROWS(orderedDrives(hardware, {"joint_1", "joint_2"}));
 }
 
+TEST_CASE("Acquisition checks position steps against hardware period and stricter velocity") {
+    const auto hardware = Hardware::LoadConfigFromYAML(fixture("hardware.yaml"));
+    ExcitationTrajectory trajectory(fixture("trajectory.json"), hardware);
+    JntArray previous(2), target(2);
+    previous.data.setZero();
+    target.data.setZero();
+    auto check = [&](double dt = .001) {
+        validatePositionCommand(target, previous, trajectory.drives, trajectory.velocity, dt);
+    };
+    CHECK_NOTHROW(check()); // 首次预置使用实测位置，无首帧豁免。
+    for (double sign : {-1., 1.}) {
+        target(0) = sign * .002;
+        CHECK_NOTHROW(check()); // 恰好等于 Studio 的 2 rad/s 上限。
+        target(0) = sign * .0021;
+        CHECK_THROWS_AS(check(), std::runtime_error);
+    }
+    // 即使外部速度上限更大，也不能越过硬件的 3 rad/s。
+    trajectory.velocity[0] = 10;
+    target(0) = .0031;
+    CHECK_THROWS_AS(check(), std::runtime_error);
+    target.data.setZero();
+    for (double dt : {0., -1., std::numeric_limits<double>::infinity(),
+                      std::numeric_limits<double>::quiet_NaN()}) CHECK_THROWS(check(dt));
+    for (double value : {std::numeric_limits<double>::infinity(),
+                         std::numeric_limits<double>::quiet_NaN()}) {
+        target(1) = value;
+        CHECK_THROWS_WITH(check(), "Nonfinite position command: joint_2");
+    }
+    target.data.setZero();
+    previous(1) = std::numeric_limits<double>::quiet_NaN();
+    CHECK_THROWS(check());
+    previous.data.setZero();
+    target(1) = 2.1;
+    CHECK_THROWS_WITH(check(), "Command position limit exceeded: joint_2");
+    // 过渡/保持允许位于激励范围外，但必须满足硬件限位。
+    previous(1) = target(1) = 1.5;
+    CHECK_NOTHROW(check());
+    target.resize(1);
+    CHECK_THROWS_WITH(check(), "Position command dimension mismatch");
+}
+
 TEST_CASE("Identified rigid and friction torque matches Studio, not nominal URDF") {
     IdentifiedJointImpedanceController controller(fixture("controller.yaml"));
     const auto cases = YAML::LoadFile(fixture("reference.json"));

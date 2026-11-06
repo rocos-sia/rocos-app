@@ -28,7 +28,7 @@ find_package(LibArchive REQUIRED)
 find_package(OpenSSL REQUIRED)
 
 # CMake VERSION 仅接受数字；完整 SemVer 版本单独拼接。
-set(ROCOS_APP_VERSION_PRERELEASE "rc.5")
+set(ROCOS_APP_VERSION_PRERELEASE "rc.6")
 set(ROCOS_APP_VERSION_FULL "${PROJECT_VERSION}")
 if(NOT ROCOS_APP_VERSION_PRERELEASE STREQUAL "")
     string(APPEND ROCOS_APP_VERSION_FULL "-${ROCOS_APP_VERSION_PRERELEASE}")
@@ -166,6 +166,8 @@ add_library(robot
         src/tool_package_http.cpp
         src/joint_binding.cpp
         src/model.cpp
+        src/model_limits.cpp
+        src/servo_signal_processor.cpp
 
         src/motion_preview_http.cpp
         src/motion_preview.cpp
@@ -524,6 +526,14 @@ add_test(NAME move_servo_test COMMAND move_servo_test)
 set_tests_properties(move_servo_test PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
+add_executable(servo_robot_test test/servo_robot_test.cc)
+target_link_libraries(servo_robot_test PRIVATE robot)
+target_compile_definitions(servo_robot_test PRIVATE
+        SERVO_TEST_DATA="${CMAKE_SOURCE_DIR}/test/data/dynamics_id")
+add_test(NAME servo_robot_test COMMAND servo_robot_test)
+set_tests_properties(servo_robot_test PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} TIMEOUT 30)
+
 add_executable(move_line_test test/move_line_test.cc)
 target_link_libraries(move_line_test
         PRIVATE
@@ -637,7 +647,7 @@ set_tests_properties(
     model_test model_reference_test hardware_test shared_memory_config_test position_controller_test
     joint_admittance_controller_test joint_impedance_controller_test
     cartesian_impedance_controller_test unit_velocity_profile_test
-    performance_profiler_test move_joint_test move_servo_test move_line_test
+    performance_profiler_test move_joint_test move_servo_test servo_robot_test move_line_test
     move_line_offline_test move_circle_test move_circle_three_point_test
     virtual_wall_test app_config_test logging_system_test
     diagnostics_http_test diagnostics_http_memory_test

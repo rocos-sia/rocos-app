@@ -20,14 +20,19 @@
 #include "joint_impedance_controller.hpp"
 
 #include <cmath>
+#include <algorithm>
 #include <variant>
 
 namespace rocos {
 
 JointImpedanceController::~JointImpedanceController() {
-    if (hardware_ != nullptr) {
-        hardware_->WaitForSignal();
-        static_cast<void>(UpdateCmd(hardware_->GetPosition()));
+    try {
+        if (hardware_ && !hardware_->SafetyStopRequested()) {
+            hardware_->WaitForSignal();
+            static_cast<void>(UpdateCmd(hardware_->GetPosition()));
+        }
+    } catch (...) {
+        if (hardware_) hardware_->RequestSafetyStop();
     }
 }
 
@@ -46,6 +51,7 @@ Result JointImpedanceController::SetReady() {
 
 bool JointImpedanceController::Reset() {
     mode_set_ = false;
+    has_last_torque_ = false;
     return true;
 }
 
@@ -203,6 +209,21 @@ Result JointImpedanceController::UpdateCmd(const JntArray& q_des) {
         return valid;
     }
 
+    const auto limits=hardware_->GetJointDerivativeLimits();
+    const double period=hardware_->GetDt()*1e-6;
+    if (!(period>0)) return Result::IllegalParameter;
+    if (!has_last_torque_) {
+        const auto previous=hardware_->GetOutputSnapshot();
+        last_torque_=previous.mode==CST_MODE ? previous.torque : hardware_->GetTorque();
+        if (last_torque_.rows()!=n) return Result::UnmatchedJointsNumber;
+    }
+    for (unsigned int i=0;i<n;++i) {
+        const double rate=limits.size()==n ? limits[i].torque_rate : 200.0;
+        if (!std::isfinite(last_torque_(i)) || !std::isfinite(rate) || rate<=0) return Result::IllegalParameter;
+        tau(i)=std::clamp(tau(i),last_torque_(i)-rate*period,last_torque_(i)+rate*period);
+    }
+    const auto limited_valid=ValidateTorqueCommand(tau);
+    if (limited_valid!=Result::NoError) return limited_valid;
     // ---- 下发力矩指令（CST 模式） ----
     if (!mode_set_) {
         hardware_->SetMode(CST_MODE);
@@ -210,6 +231,8 @@ Result JointImpedanceController::UpdateCmd(const JntArray& q_des) {
     }
 
     hardware_->SetTorque(tau);
+    last_torque_=tau;
+    has_last_torque_=true;
     return Result::NoError;
 }
 

@@ -46,7 +46,15 @@ public:
     int set_mode_count_{0};             // SetMode 被调用次数
     int set_position_count_{0};         // SetPosition 被调用次数
     int wait_for_signal_count_{0};      // WaitForSignal 被调用次数
-    uint32_t dt_us_{1000};              // 控制周期 [us]
+    uint32_t dt_us_{1000};
+    bool stale_feedback{false};
+    double actual_speed{0};
+    int safety_stops{0};
+    rocos::Result CheckFeedbackFreshness(uint64_t) const override {
+        return stale_feedback?rocos::Result::LostHeartbeat:rocos::Result::NoError;
+    }
+    void RequestSafetyStop() noexcept override { ++safety_stops; }
+    bool SafetyStopRequested() const override { return safety_stops>0; }              // 控制周期 [us]
     rocos::JntState GetState() override { return rocos::JntState::ENABLED; }
 
     rocos::JntState GetJointState(int32_t id) override { return rocos::JntState::ENABLED; }
@@ -55,7 +63,9 @@ public:
 
     // ========== DriveInterface — 批量操作 ==========
     rocos::JntArray GetPosition() override { return fake_position_; }
-    rocos::JntArray GetVelocity() override { return {}; }
+    rocos::JntArray GetVelocity() override {
+        rocos::JntArray v(fake_position_.rows()); v.data.setConstant(actual_speed); return v;
+    }
     rocos::JntArray GetTorque() override { return {}; }
     rocos::JntArray GetLoadTorque() override { return {}; }
     void SetPosition(const rocos::JntArray& q) override {
@@ -596,14 +606,14 @@ TEST_CASE("PositionController - UpdateCmd") {
 
         // 指令小步进前进（0.001 / 0.001 = 1 rad/s < 5.0），但反馈始终落后
         rocos::JntArray q(1);
-        q(0) = 0.5;
+        q(0) = 0.05;
         CHECK(ctrl.UpdateCmd(q) == rocos::Result::NoError);  // 首次建立基线
-        q(0) = 0.501;
+        q(0) = 0.051;
         CHECK(ctrl.UpdateCmd(q) == rocos::Result::NoError);
-        q(0) = 0.502;
+        q(0) = 0.052;
         CHECK(ctrl.UpdateCmd(q) == rocos::Result::NoError);
 
-        // 反馈(0)与指令(0.502)已相差 0.502，旧逻辑 (q_cmd-q_actual)/dt 会误报 SpeedLimit
+        // 反馈(0)与指令(0.052)已相差 0.052，旧逻辑 (q_cmd-q_actual)/dt 会误报 SpeedLimit
         CHECK(hw.set_position_count_ == 3);
     }
 
@@ -685,4 +695,32 @@ TEST_CASE("PositionController - 完整调用链") {
         auto upd_res = ctrl.UpdateCmd(q_cmd);
         CHECK(upd_res == rocos::Result::NoError);
     }
+}
+
+TEST_CASE("Position feedback limits and following error reject output") {
+    FakeHardware hw; FakeModel model;
+    hw.fake_position_=rocos::JntArray(3); model.SetLimits(3,-1,1,2);
+    rocos::PositionController ctrl;
+    REQUIRE(ctrl.SetHardware(&hw)==rocos::Result::NoError);
+    REQUIRE(ctrl.SetModel(&model)==rocos::Result::NoError);
+    rocos::JntArray q(3);
+    REQUIRE(ctrl.UpdateCmd(q)==rocos::Result::NoError);
+    SUBCASE("actual position outside model bounds") {
+        hw.fake_position_(0)=2;
+        CHECK(ctrl.UpdateCmd(q)==rocos::Result::PosLimit);
+    }
+    SUBCASE("actual position lags previous command beyond tolerance") {
+        hw.fake_position_(0)=.1;
+        CHECK(ctrl.UpdateCmd(q)==rocos::Result::NotFollowPositionCmd);
+    }
+    SUBCASE("actual velocity outside model bounds") {
+        hw.actual_speed=3;
+        CHECK(ctrl.UpdateCmd(q)==rocos::Result::SpeedLimit);
+    }
+    SUBCASE("stale feedback") {
+        hw.stale_feedback=true;
+        CHECK(ctrl.UpdateCmd(q)==rocos::Result::LostHeartbeat);
+    }
+    CHECK(hw.set_position_count_==1);
+    CHECK(hw.safety_stops==1);
 }

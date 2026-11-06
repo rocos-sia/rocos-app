@@ -136,12 +136,12 @@ void robotKeys(const Node& node, const std::string& where, bool manifest) {
     if (manifest)
         keys(node,
              {"schema_version", "name", "package_version", "urdf", "base_link", "tip_link", "ecat_id",
-              "hardware_config", "master_type", "master_config"},
+              "hardware_config", "master_type", "master_config", "servo"},
              where);
     else
         keys(node,
              {"urdf", "base_link", "tip_link", "ecat_id", "hardware_config", "master_type", "master_config", "hardware",
-              "master"},
+              "master", "servo"},
              where);
 }
 void robotPaths(Node node, const std::string& file) {
@@ -314,7 +314,7 @@ Node hardwareConfig(const Node& list, const std::string& where) {
             require(joints.insert(string(node, "joint_name", at)).second, at + ": duplicate joint_name");
             defaults = YAML::Load(R"(
 torque_source: load_torque
-limit: {lower: -2.71, upper: 2.71, vel: 3.0, acc: 10.0, jerk: 150.0, effort: 30.0}
+limit: {lower: -2.71, upper: 2.71, vel: 3.0, acc: 10.0, jerk: 150.0, effort: 30.0, deceleration: 0.0, velocity_offset: 0.0, torque_rate: 200.0, following_error: 0.0}
 transform: {ratio: 1.0, offset_pos_cnt: 0, cnt_per_unit: 1.0, torque_per_unit: 1.0, user_unit_name: rad}
 inputs: {status_word: '', position_actual_value: '', velocity_actual_value: '', torque_actual_value: '', load_torque_value: '', secondary_position_value: '', digital_inputs: '', digital_outputs: ''}
 outputs: {control_word: '', mode_of_operation: '', target_position: '', target_velocity: '', target_torque: '', digital_outputs: ''}
@@ -354,7 +354,7 @@ outputs: {control_word: '', mode_of_operation: '', target_position: '', target_v
             choice(node, "torque_source", {"load_torque", "secondary_position"}, at);
             const auto limit = node["limit"], transform = node["transform"];
             require(number(limit, "lower", at) <= number(limit, "upper", at), at + ": lower exceeds upper");
-            for (auto key : {"vel", "acc", "jerk", "effort"})
+            for (auto key : {"vel", "acc", "jerk", "effort", "deceleration", "velocity_offset", "torque_rate", "following_error"})
                 require(number(limit, key, at) >= 0, at + ".limit." + key + " must be nonnegative");
             for (auto key : {"ratio", "cnt_per_unit", "torque_per_unit"})
                 require(number(transform, key, at) != 0, at + ".transform." + key + " must not be zero");
@@ -653,6 +653,8 @@ diagnostics: {host: 0.0.0.0, port: 8082, max_sse_clients: 4, max_downloads: 1}
                     }
                 require(found, "joint_zero references unknown hardware joint: " + joint.first.as<std::string>());
             }
+        config.robot.servo = LoadServoSettings(robot["servo"]);
+        robot["servo"] = ServoSettingsToYaml(config.robot.servo);
         robot["hardware"] = hw;
         device["calibration"] = calibration;
         config.effective["software"] = software;

@@ -182,6 +182,40 @@ inline void checkEnabled(Hardware& hardware) {
     require(hardware.GetState() == JntState::ENABLED, "Not all drives are enabled");
 }
 
+// 与位置控制器相同的指令步进检查；使用标称硬件周期，不能用延迟后的墙钟时间放宽限速。
+// previous 必须是上一条成功下发的目标，首次下发前以实际位置建立基线。
+inline void validatePositionCommand(const JntArray& target, const JntArray& previous,
+                                    const std::vector<Drive>& drives,
+                                    const Eigen::VectorXd& velocity, double dt) {
+    require(!drives.empty() && target.rows() == drives.size() &&
+                previous.rows() == drives.size() && velocity.size() == target.rows(),
+            "Position command dimension mismatch");
+    require(std::isfinite(dt) && dt > 0, "Invalid position command period");
+    for (size_t j = 0; j < drives.size(); ++j) {
+        const auto& drive = drives[j];
+        const auto& limit = drive.limit;
+        require(std::isfinite(limit.lower) && std::isfinite(limit.upper) &&
+                    limit.lower < limit.upper && std::isfinite(limit.vel) && limit.vel > 0 &&
+                    std::isfinite(velocity[j]) && velocity[j] > 0,
+                "Invalid position command limits: " + drive.joint_name);
+        require(std::isfinite(target(j)) && std::isfinite(previous(j)),
+                "Nonfinite position command: " + drive.joint_name);
+        // 过渡允许从激励范围外的合法姿态开始；激励阶段还由 evaluate 检查轨迹位置范围。
+        require(target(j) >= limit.lower && target(j) <= limit.upper,
+                "Command position limit exceeded: " + drive.joint_name);
+        const double speed = std::abs(target(j) - previous(j)) / dt;
+        const double maxSpeed = std::min(limit.vel, velocity[j]);
+        if (!std::isfinite(speed) || speed > maxSpeed) {
+            throw std::runtime_error(
+                "Command velocity limit exceeded: " + drive.joint_name +
+                ", previous=" + std::to_string(previous(j)) +
+                ", target=" + std::to_string(target(j)) + ", dt=" + std::to_string(dt) +
+                ", speed=" + std::to_string(speed) + " rad/s, limit=" +
+                std::to_string(maxSpeed) + " rad/s");
+        }
+    }
+}
+
 inline void limitTorque(const Eigen::VectorXd& requested, const Eigen::VectorXd& magnitude,
                         const Eigen::VectorXd& rate, double dt, Eigen::VectorXd& sent) {
     require(requested.allFinite() && dt > 0 && std::isfinite(dt), "Invalid torque/time step");

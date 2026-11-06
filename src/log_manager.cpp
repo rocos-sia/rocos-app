@@ -19,12 +19,18 @@ const char* moduleName(LogModule module) {
         case LogModule::Model: return "Model";
         case LogModule::MoveJoint: return "MoveJoint";
         case LogModule::Hardware: return "Hardware";
+        case LogModule::MoveServo: return "MoveServo";
     }
     return "Unknown";
 }
 std::string eventMessage(const RtLogEvent& event) {
     const auto result = to_string(static_cast<Result>(event.code));
     switch (event.type) {
+        case LogEventType::ServoCommunicationFault:
+            return fmt::format("Servo communication fault: success_rate={}, missing_cycles={}, minimum_rate={}; controlled stop latched.", event.value, event.lower, event.upper);
+        case LogEventType::ServoStartPoseInvalid:
+            return fmt::format("start_pose_invalid: joint {} first servo target differs from actual position by {:.9f}; maximum allowed per control cycle: {:.9f} (model joint units). Move to the trajectory start before starting servo.",
+                               event.joint + 1, event.value, event.upper);
         case LogEventType::VelocityLimit:
             return fmt::format("Joint {} command velocity exceeded the limit: {:.6f} rad/s; maximum allowed: {:.6f} rad/s.",
                                event.joint + 1, event.value, event.upper);

@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "robot.hpp"
+#include "servo_settings_yaml.hpp"
 #include "diagnostics_http_server.hpp"
 
 namespace rocos {
@@ -66,6 +67,7 @@ struct AppConfig {
         const auto robot = root["robot"];
         if (robot) {
             if (!robot.IsMap()) throw std::invalid_argument("robot must contain a mapping");
+            config.robot.servo = LoadServoSettings(robot["servo"]);
             config.robot.hardware_config = read(robot, "hardware_config", config.robot.hardware_config);
             config.robot.ecat_id = read(robot, "ecat_id", config.robot.ecat_id);
             config.robot.urdf = read(robot, "urdf", config.robot.urdf);

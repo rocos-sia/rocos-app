@@ -1,4 +1,5 @@
 #include "executor.hpp"
+#include "move_servo.hpp"
 
 namespace rocos {
 
@@ -22,7 +23,7 @@ Executor::Executor(MotionInterface* motion, ControllerInterface* controller,
 
 Executor::~Executor() {
   if (motion_)
-    motion_->Reset();
+    motion_->Stop();
 
   if (controller_)
     controller_->Reset();
@@ -49,6 +50,13 @@ Result Executor::Update() {
     return Result::ParameterPointerEqualsNullptr;
   }
 
+  auto* servo=dynamic_cast<MoveServo*>(motion_);
+  auto complete=[&](Result result) {
+    if (servo) servo->CompleteCycle(result);
+    if (static_cast<int>(result)<0 && servo) hardware_->RequestSafetyStop();
+    return result;
+  };
+  if (hardware_->SafetyStopRequested()) return complete(Result::LostHeartbeat);
   profiler_->MeasureEnd(kCycleMeasurement);
   profiler_->MeasureStart(kExecutorMeasurement);
 
@@ -61,7 +69,7 @@ Result Executor::Update() {
 
   if (static_cast<int>(res) < 0) {
     emitLogEvent(LogEventType::MotionFailed, LogModule::Executor, static_cast<int>(res));
-    return res;
+    return complete(res);
   }
 
   sum += static_cast<int>(res);
@@ -74,7 +82,7 @@ Result Executor::Update() {
 
   if (static_cast<int>(res) < 0) {
     emitLogEvent(LogEventType::ControllerFailed, LogModule::Executor, static_cast<int>(res));
-    return res;
+    return complete(res);
   }
 
   sum += static_cast<int>(res);
@@ -85,7 +93,7 @@ Result Executor::Update() {
 
   if (static_cast<int>(res) < 0) {
     emitLogEvent(LogEventType::CommandFailed, LogModule::Executor, static_cast<int>(res));
-    return res;
+    return complete(res);
   }
 
   sum += static_cast<int>(res);
@@ -95,10 +103,10 @@ Result Executor::Update() {
   profiler_->MeasureStart(kCycleMeasurement);
 
   if (sum > 0) {
-    return Result::PlanFinished;
+    return complete(Result::PlanFinished);
   }
 
-  return Result::NoError;
+  return complete(Result::NoError);
 }
 
 bool Executor::SwitchController(ControllerInterface* new_controller) {

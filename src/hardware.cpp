@@ -88,6 +88,13 @@ Drive Hardware::parseDrive(const YAML::Node& node) {
         d.limit.vel    = yamlGetDouble(lim, "vel", 3.0);
         d.limit.acc    = yamlGetDouble(lim, "acc", 10.0);
         d.limit.jerk   = yamlGetDouble(lim, "jerk", 150.0);
+        d.limit.deceleration = yamlGetDouble(lim, "deceleration", 0.0);
+        d.limit.torque_rate = yamlGetDouble(lim, "torque_rate", 200.0);
+        d.limit.following_error = yamlGetDouble(lim, "following_error", 0.0);
+        if (!std::isfinite(d.limit.torque_rate) || d.limit.torque_rate <= 0 ||
+            !std::isfinite(d.limit.following_error) || d.limit.following_error < 0)
+            throw std::invalid_argument("Invalid torque_rate/following_error limit");
+        d.limit.velocity_offset = yamlGetDouble(lim, "velocity_offset", 0.0);
         d.limit.effort = yamlGetDouble(lim, "effort", 30.0);
     }
 
@@ -254,13 +261,13 @@ void Hardware::WaitForSignal() {
         auto* signal = ec_ptr_->sem_mutex[8];
         if (!signal || signal == SEM_FAILED) throw std::runtime_error("Invalid EtherCAT cycle semaphore");
         timespec deadline{};
-        if (clock_gettime(CLOCK_REALTIME, &deadline) != 0)
+        if (clock_gettime(CLOCK_MONOTONIC, &deadline) != 0)
             throw std::runtime_error("Cannot read cycle deadline clock");
         deadline.tv_sec += cycle_timeout_ms_ / 1000;
         deadline.tv_nsec += static_cast<long>(cycle_timeout_ms_ % 1000) * 1000000L;
         deadline.tv_sec += deadline.tv_nsec / 1000000000L;
         deadline.tv_nsec %= 1000000000L;
-        while (sem_timedwait(signal, &deadline) != 0) {
+        while (sem_clockwait(signal, CLOCK_MONOTONIC, &deadline) != 0) {
             if (errno == EINTR) continue;
             if (errno == ETIMEDOUT) throw std::runtime_error("EtherCAT cycle timed out");
             throw std::runtime_error("EtherCAT v2 cycle wait failed");
@@ -297,6 +304,7 @@ Result Hardware::ClearFault() {
         }
     }
 
+    safety_stop_.store(false);
     return Result::NoError;
 }
 
@@ -387,6 +395,9 @@ JntArray Hardware::GetLoadTorque() {
 }
 
 void Hardware::SetPosition(const JntArray& q) {
+    if (safety_stop_.load()) return;
+    std::lock_guard<std::mutex> lock(output_mutex_);
+    output_snapshot_.position=q;
     for (size_t i = 0; i < ModelJointCount() && i < q.rows(); ++i) {
         SetJointPosition(DriveIdByModelIndex(i), q(i));
     }
@@ -399,18 +410,25 @@ void Hardware::SetVelocity(const JntArray& q_dot) {
 }
 
 void Hardware::SetTorque(const JntArray& tau) {
+    if (safety_stop_.load()) return;
+    std::lock_guard<std::mutex> lock(output_mutex_);
+    output_snapshot_.torque=tau;
     for (size_t i = 0; i < ModelJointCount() && i < tau.rows(); ++i) {
         SetJointTorque(DriveIdByModelIndex(i), tau(i));
     }
 }
 
 void Hardware::SetMode(int8_t mode) {
+    if (safety_stop_.load()) return;
+    std::lock_guard<std::mutex> lock(output_mutex_);
+    output_snapshot_.mode=mode;
     for (auto& drive : config_.drives) {
         SetJointMode(drive.id, mode);
     }
 }
 
 void Hardware::SetEnabled() {
+    if (safety_stop_.load()) return;
     setDriverStates(0, drive_sm_state_.size(), DriveState::OperationEnabled);
 }
 
@@ -664,6 +682,10 @@ void Hardware::engageStateMachine(size_t idx) {
     auto& sm = drive_sm_state_[idx];
     auto& cache = drive_pdo_cache_[idx];
     if (!cache.status_word || !cache.control_word) return;
+    if (safety_stop_.load() && sm.targetState == DriveState::OperationEnabled) {
+        cache.control_word.write(0x0002);
+        return;
+    }
 
     Statusword statusword;
     statusword.setFromRawStatusword(cache.status_word.read());
@@ -744,6 +766,7 @@ void Hardware::smWorkingThread() {
 }
 
 void Hardware::SetJointEnabled(int32_t id) {
+    if (safety_stop_.load()) return;
     auto idx = getDriveIdx(id);
     if (idx < 0) return;
     setDriverState(static_cast<size_t>(idx), DriveState::OperationEnabled);
@@ -1153,3 +1176,61 @@ HardwareType Hardware::getHardwareType(int32_t slave_id) const {
 }
 
 }  // namespace rocos
+
+namespace rocos {
+std::vector<JointDerivativeLimits> Hardware::GetJointDerivativeLimits() const {
+    std::vector<JointDerivativeLimits> limits;
+    limits.reserve(ModelJointCount());
+    for (size_t i = 0; i < ModelJointCount(); ++i) {
+        const auto* drive = findDriveById(DriveIdByModelIndex(i));
+        if (!drive) return {};
+        const auto& l = drive->limit;
+        limits.push_back({l.acc, l.jerk, l.deceleration == 0 ? l.acc : l.deceleration,
+                          l.velocity_offset, l.torque_rate, l.following_error});
+    }
+    return limits;
+}
+}  // namespace rocos
+
+namespace rocos {
+void Hardware::ConfigureCycleTimeout(uint32_t cycles) {
+    cycle_timeout_ms_=std::max<uint32_t>(1,(uint64_t(GetDt())*cycles+999)/1000);
+}
+void Hardware::RequestSafetyStop() noexcept {
+    safety_stop_.store(true);
+    // 独立监督线程只发布 CiA402 Quick Stop，不等待主站或驱动确认。
+    for (auto& cache:drive_pdo_cache_)
+        if (cache.control_word) cache.control_word.write(0x0002);
+}
+OutputSnapshot Hardware::GetOutputSnapshot() const {
+    std::lock_guard<std::mutex> lock(output_mutex_);
+    return output_snapshot_;
+}
+Result Hardware::CheckFeedbackFreshness(uint64_t max_age_us) const {
+    const auto stamp=ec_ptr_->getTimestamp();
+    const auto now=std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    if (stamp<=0 || stamp>now || uint64_t(now-stamp)>max_age_us) return Result::LostHeartbeat;
+    return Result::NoError;
+}
+Result Hardware::ReadFeedbackSnapshot(FeedbackSnapshot& snapshot) {
+    // 缺少必需 PDO 不能伪装成零位置/零速度的有效反馈。
+    for (size_t i=0;i<ModelJointCount();++i) {
+        const auto index=getDriveIdx(DriveIdByModelIndex(i));
+        if (index<0) return Result::JointStateError;
+        const auto& cache=drive_pdo_cache_[static_cast<size_t>(index)];
+        if (!cache.position_actual_value || !cache.velocity_actual_value) return Result::JointStateError;
+    }
+    for (int attempt=0; attempt<3; ++attempt) {
+        const auto before=ec_ptr_->getTimestamp();
+        auto rc=HardwareInterface::ReadFeedbackSnapshot(snapshot);
+        if (rc!=Result::NoError) return rc;
+        const auto after=ec_ptr_->getTimestamp();
+        if (before==after) {
+            snapshot.source_time_us=after;
+            return CheckFeedbackFreshness(uint64_t(GetDt())*20);
+        }
+    }
+    return Result::LostHeartbeat;
+}
+} // namespace rocos

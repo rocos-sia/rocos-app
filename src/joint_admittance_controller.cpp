@@ -25,10 +25,15 @@
 namespace rocos {
 
 JointAdmittanceController::~JointAdmittanceController() {
-    if (hardware_ != nullptr) {
-        hardware_->WaitForSignal();
-        adm_initialized_ = false;
-        static_cast<void>(UpdateCmd(hardware_->GetPosition()));
+    try {
+        if (hardware_ != nullptr && !hardware_->SafetyStopRequested()) {
+            hardware_->WaitForSignal();
+            adm_initialized_ = false;
+            static_cast<void>(UpdateCmd(hardware_->GetPosition()));
+        }
+
+    } catch (...) {
+        if (hardware_) hardware_->RequestSafetyStop();
     }
 }
 

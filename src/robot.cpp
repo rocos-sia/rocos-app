@@ -297,6 +297,7 @@ namespace rocos {
     }
 
     void Robot::on_fsm_disabling() {
+        FinishRciControl();
         log_ptr_->info("Robot disable requested.");
 
         setDisabled();
@@ -399,21 +400,35 @@ namespace rocos {
         fsm_error_entered_once_ = true;
         return;
       }
+      servo_watchdog_armed_.store(false);
+      FinishRciControl();
       emitLogEvent(LogEventType::EnteredError, LogModule::Robot, 0);
       {
         std::lock_guard<std::mutex> lock(mtx_);
         if (motion) {
-          motion->Stop();  // 停止当前 motion，确保 MoveServo 的 UDP 线程等资源被释放
+          if (auto* servo = dynamic_cast<MoveServo*>(motion.get())) {
+              last_servo_status_ = servo->GetStatus();
+              servo->Abort();
+          } else motion->Stop();
         }
       }
     }
     void Robot::on_fsm_stopped() {
+      servo_watchdog_armed_.store(false);
+      FinishRciControl();
       emitLogEvent(LogEventType::EnteredStopped, LogModule::Robot, 0, -1, 0, 0, 0, LogLevel::Info);
 
       {
         std::lock_guard<std::mutex> lock(mtx_);
 
-        motion = std::make_unique<MoveHold>(hardware->GetPosition());
+        auto hold = hardware->GetPosition();
+        if (auto* servo = dynamic_cast<MoveServo*>(motion.get())) {
+            last_servo_status_ = servo->GetStatus();
+            const auto diagnostic = servo->GetDiagnostics();
+            if (diagnostic.desired_position.rows() == hold.rows())
+                hold = diagnostic.desired_position;
+        }
+        motion = std::make_unique<MoveHold>(hold);
         executor->SwitchMotion(motion.get());
 
       }
@@ -487,6 +502,22 @@ namespace rocos {
 
       stopControlThread();
 
+        watchdog_running_.store(true);
+        control_thread_alive_.store(true);
+        last_control_progress_ns_.store(ServoSession::Now());
+        watchdog_thread_=std::thread([this] {
+            const int64_t timeout=int64_t(hardware->GetDt())*servo_settings_.max_missing_cycles*1000;
+            while (watchdog_running_.load()) {
+                if (servo_watchdog_armed_.load() && timeout>0 &&
+                    (!control_thread_alive_.load() ||
+                     ServoSession::Now()-last_control_progress_ns_.load()>timeout)) {
+                    hardware->RequestSafetyStop();
+                    if (!control_thread_alive_.load())
+                        impl_->process_event(EventErrorOccurred{});
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+        });
         control_thread_ = std::thread([this]() {
             bindRtLogProducer(rt_log_producer_.get());
             const auto monotonic_us = std::chrono::duration_cast<std::chrono::microseconds>(
@@ -496,9 +527,24 @@ namespace rocos {
             while (IsControlActive()) {
                 setRtLogCycle(cycle, 0); // Executor 的现有性能采样更新实际周期时间。
                 ++cycle;
-                RunCycle();
-                waitControlCycle();
+                try {
+                    if (hardware->SafetyStopRequested()) {
+                        RunCycle(); // Executor 发布本周期失败状态后进入 ERROR。
+                        break;
+                    }
+                    RunCycle();
+                    last_control_progress_ns_.store(ServoSession::Now());
+                    if (!IsControlActive()) break;
+                    waitControlCycle();
+                } catch (const std::exception& error) {
+                    hardware->RequestSafetyStop();
+                    emitLogEvent(LogEventType::CycleFailed, LogModule::Robot, static_cast<int>(Result::LostHeartbeat));
+                    impl_->process_event(EventErrorOccurred{});
+                    break;
+                }
             }
+            // 监督线程由 joinControlThreadIfJoinable 回收，不能随被监督线程退出。
+            control_thread_alive_.store(false);
             bindRtLogProducer(nullptr);
         });
     }
@@ -516,6 +562,8 @@ namespace rocos {
             return;
         }
         control_thread_.join();
+        watchdog_running_.store(false);
+        if (watchdog_thread_.joinable()) watchdog_thread_.join();
     }
 
     void Robot::jointBinding() {
@@ -547,8 +595,10 @@ namespace rocos {
         std::ifstream binding_file(joint_binding_path_);
         if (joint_binding_path_.empty()) {
           // 新结构只认 hardware 中的 joint_name，不按列表顺序推断。
-          for (const auto id : hardware_drive_ids) {
-            const auto name = hardware->getJointName(id);
+          for (size_t i = 0; i < hardware_drive_ids.size(); ++i) {
+            const auto id = hardware_drive_ids[i];
+            // 尚未绑定时 getJointName 使用配置列表索引，不是 EtherCAT drive id。
+            const auto name = hardware->getJointName(static_cast<int32_t>(i));
             if (name.empty() || joint_binding_->HasBindingForJoint(name) ||
                 joint_binding_->Bind(name, id) != Result::NoError) {
               throw std::runtime_error("Invalid hardware joint_name binding: " + name);
@@ -618,6 +668,7 @@ namespace rocos {
     Robot::Robot() : Robot(Config{}) {}
 
     Robot::Robot(const Config &config) : frames_(config.frames, config.tool_library, config.id), log_ptr_(Logger::getInstance("Robot")), impl_(std::make_unique<Impl>(*this)) {
+        servo_settings_ = config.servo;
         executor = std::make_unique<Executor>();
 
         joint_binding_path_ = config.joint_binding;
@@ -638,6 +689,7 @@ namespace rocos {
         }
         auto robot_hardware = std::make_unique<Hardware>(hardware_config, config.ecat_id);
         robot_hardware->ConfigureMimicJoints(mimics);
+        robot_hardware->ConfigureCycleTimeout(servo_settings_.max_missing_cycles);
         hardware = std::move(robot_hardware);
         if (config.master_cycle_us > 0 && hardware->GetDt() != static_cast<uint32_t>(config.master_cycle_us)) {
             throw std::runtime_error("Running master cycle differs from robot.master.cycle; apply the exported master configuration first");
@@ -840,6 +892,8 @@ namespace rocos {
     }
 
     Result Robot::SetWorkMode(const std::string& mode) {
+        auto command_lock = LockToolState();
+        if (IsRciEnabled()) return Result::ConflictTaskRunning;
         // 仅允许在 IDLE 或 STOPPED 状态下切换控制器
         const bool is_switchable_state =
             impl_->is(sml::state<class IDLE>) ||
@@ -995,6 +1049,8 @@ namespace rocos {
 
 
     Result Robot::SetLoadParameters(double mass, const Vector& com) {
+        auto command_lock = LockToolState();
+        if (IsRciEnabled()) return Result::ConflictTaskRunning;
         // 非法参数拒绝，避免把错误负载补偿下发到硬件；mass=0 表示无负载（合法）
         if (mass < 0.0 || !std::isfinite(mass) ||
             !std::isfinite(com.x()) || !std::isfinite(com.y()) ||
@@ -1013,6 +1069,8 @@ namespace rocos {
     }
 
     Result Robot::LoadLoadParameters(const std::string& path) {
+        auto command_lock = LockToolState();
+        if (IsRciEnabled()) return Result::ConflictTaskRunning;
         const std::string file = path.empty() ? load_params_path_ : path;
 
         // 文件不存在时静默返回，视为"尚未辨识过负载"，走辨识流程
@@ -1130,6 +1188,7 @@ namespace rocos {
     }
 
     bool Robot::IsControlActive() const {
+        auto state_lock = impl_->lockState();
         return impl_->is(sml::state<class ENABLING>)
                || impl_->is(sml::state<class RUNNING>)
                || impl_->is(sml::state<class PAUSING>)
@@ -1246,6 +1305,7 @@ namespace rocos {
     Result Robot::MoveJ(const JntArray &q_goal,
                         double v_limit, double a_limit, double j_limit) {
         auto command_lock = LockToolState();
+        if (IsRciEnabled()) return Result::ConflictTaskRunning;
         JntArray coupled_goal = q_goal;
         const auto coupling = model->ApplyPositionCoupling(coupled_goal);
         if (coupling != Result::NoError) return coupling;
@@ -1307,6 +1367,7 @@ namespace rocos {
                         const std::string &tool_name,
                         double v_limit, double a_limit, double j_limit) {
         auto command_lock = LockToolState();
+        if (IsRciEnabled()) return Result::ConflictTaskRunning;
         if (!tool_name.empty() && !HasToolFrame(tool_name)) {
             log_ptr_->error("Requested tool frame does not exist: {}", tool_name);
             return Result::ResourceUnavailable;
@@ -1386,6 +1447,7 @@ namespace rocos {
     Result Robot::MoveJ_IK(const Frame &pose_goal,
                            double v_limit, double a_limit, double j_limit) {
         auto command_lock = LockToolState();
+        if (IsRciEnabled()) return Result::ConflictTaskRunning;
         if (!model) {
             log_ptr_->error("MoveJ_IK requires an initialized robot model.");
             return Result::ResourceUnavailable;
@@ -1410,6 +1472,7 @@ namespace rocos {
                            const std::string &tool_name,
                            double v_limit, double a_limit, double j_limit) {
         auto command_lock = LockToolState();
+        if (IsRciEnabled()) return Result::ConflictTaskRunning;
         if (!model) {
             log_ptr_->error("MoveL_FK requires an initialized robot model.");
             return Result::ResourceUnavailable;
@@ -1489,7 +1552,7 @@ namespace rocos {
 
     std::unique_lock<std::recursive_mutex> Robot::LockToolState() const { return impl_->lock(); }
     bool Robot::CanChangeToolState() const {
-        return impl_->is(sml::state<class IDLE>) || impl_->is(sml::state<class STOPPED>);
+        return !IsRciEnabled() && (impl_->is(sml::state<class IDLE>) || impl_->is(sml::state<class STOPPED>));
     }
     Result Robot::ModifyFrames(const std::function<Result()>& change) const {
         auto state_lock = LockToolState();
@@ -1525,6 +1588,7 @@ namespace rocos {
     Result Robot::MoveC(const Frame &pose_start, const Frame &center_frame,
                         double theta, double v_limit, double a_limit, double j_limit) {
         auto command_lock = LockToolState();
+        if (IsRciEnabled()) return Result::ConflictTaskRunning;
         data_ready_callback_ = [this, pose_start, center_frame, theta, v_limit, a_limit, j_limit]() -> Result {
             auto new_motion = std::make_unique<MoveCircleOffline>(
                 pose_start, center_frame, theta, model.get(),
@@ -1570,6 +1634,7 @@ namespace rocos {
                         const Frame &pose_goal,
                         double v_limit, double a_limit, double j_limit) {
         auto command_lock = LockToolState();
+        if (IsRciEnabled()) return Result::ConflictTaskRunning;
         data_ready_callback_ = [this, pose_start, pose_via, pose_goal, v_limit, a_limit, j_limit]() -> Result {
             auto new_motion = std::make_unique<MoveCircleOffline>(
                 pose_start, pose_via, pose_goal, model.get(),
@@ -1608,6 +1673,8 @@ namespace rocos {
     }
 
     Result Robot::PauseMotion() {
+        auto command_lock = LockToolState();
+        if (IsRciEnabled()) return Result::ConflictTaskRunning;
         //TODO: 直接判断是否支持暂停，不支持直接忽略请求
         {
             std::lock_guard<std::mutex> lock(mtx_);
@@ -1645,6 +1712,8 @@ namespace rocos {
     }
 
     Result Robot::ResumeMotion() {
+        auto command_lock = LockToolState();
+        if (IsRciEnabled()) return Result::ConflictTaskRunning;
         //TODO: 直接判断是否支持恢复，不支持直接忽略请求
         {
             std::lock_guard<std::mutex> lock(mtx_);
@@ -1676,6 +1745,7 @@ namespace rocos {
                               double timeout,
                               double dir_threshold) {
         auto command_lock = LockToolState();
+        if (IsRciEnabled()) return Result::ConflictTaskRunning;
         rocos::Rotation R_base_frame = rocos::Rotation::Identity();
 
         switch (frame) {
@@ -1709,6 +1779,7 @@ namespace rocos {
     Result Robot::MoveJogging(const JogVec &direction, double speed,
                               double timeout, double dir_threshold) {
         auto command_lock = LockToolState();
+        if (IsRciEnabled()) return Result::ConflictTaskRunning;
         // ── 分支 1：已有活跃 MoveJog → 旁路喂饭 ──
         {
             std::lock_guard<std::mutex> lock(mtx_);
@@ -1768,6 +1839,7 @@ namespace rocos {
     Result Robot::MoveNullJogging(const JntArray &intent_direction, double speed,
                                   double timeout, double dir_threshold) {
         auto command_lock = LockToolState();
+        if (IsRciEnabled()) return Result::ConflictTaskRunning;
         // ── 分支 1：已有活跃 MoveNullJog → 旁路喂饭 ──
         {
             std::lock_guard<std::mutex> lock(mtx_);
@@ -1828,6 +1900,7 @@ namespace rocos {
     Result Robot::MoveSvdJogging(const std::vector<double> &dim_speeds,
                                  double timeout, double dir_threshold) {
         auto command_lock = LockToolState();
+        if (IsRciEnabled()) return Result::ConflictTaskRunning;
         // ── 分支 1：已有活跃 MoveSvdJog → 旁路喂饭 ──
         {
             std::lock_guard<std::mutex> lock(mtx_);
@@ -1885,6 +1958,7 @@ namespace rocos {
 
     Result Robot::SetServoMode(const std::string& mode_str) {
         auto command_lock = LockToolState();
+        if (IsRciEnabled()) return Result::ConflictTaskRunning;
         MotionMode new_mode;
         if (mode_str == "joint") {
             new_mode = MotionMode::kJointPosition;
@@ -1895,19 +1969,20 @@ namespace rocos {
             return Result::IllegalParameter;
         }
 
-        servo_mode_ = new_mode;
 
         // 如果当前正在伺服模式，动态更新运行中的 MoveServo
         if (impl_->is(sml::state<class SERVOING>)) {
             std::lock_guard<std::mutex> lock(mtx_);
             auto* servo = dynamic_cast<MoveServo*>(motion.get());
             if (servo) {
-                servo->SetMode(new_mode);
+                const auto rc = servo->SetMode(new_mode);
+                if (rc != Result::NoError) return rc;
             } else {
                 log_ptr_->warn("SetServoMode cannot update the active motion: it is not a MoveServo instance.");
             }
         }
 
+        servo_mode_ = new_mode;
         log_ptr_->info("Servo mode set to {}.", mode_str);
         return Result::NoError;
     }
@@ -1916,18 +1991,113 @@ namespace rocos {
     // MoveServoing —— UDP 伺服模式
     // ============================================================================
 
-    Result Robot::MoveServoing(uint16_t port) {
+    Result Robot::EnableRci() {
         auto command_lock = LockToolState();
-        data_ready_callback_ = [this, port]() -> Result {
+        auto state_lock = impl_->lockState();
+        if (rci_closing_) return Result::ConflictTaskRunning;
+        if (rci_enabled_) return Result::NoError;
+        if (!impl_->is(sml::state<class STOPPED>) || script_active_)
+            return Result::ConflictTaskRunning;
+        rci_enabled_ = true;
+        log_ptr_->info("RCI enabled; waiting for an external control session.");
+        return Result::NoError;
+    }
+
+    Result Robot::StartRciControl(std::shared_ptr<ServoSession>& session,
+                                  uint16_t port, const std::string& mode) {
+        auto command_lock = LockToolState();
+        auto state_lock = impl_->lockState();
+        if (!rci_enabled_) return Result::ServoNotInitialized;
+        if (rci_closing_ || rci_active_ ||
+            !impl_->is(sml::state<class STOPPED>))
+            return Result::ConflictTaskRunning;
+        if (port == 0 || (mode != "joint" && mode != "cartesian"))
+            return Result::IllegalParameter;
+        auto next = std::make_shared<ServoSession>();
+        servo_mode_ = mode == "joint" ? MotionMode::kJointPosition
+                                      : MotionMode::kCartesianPosition;
+        rci_active_ = true;
+        const auto result = StartServo(port, next);
+        if (result != Result::NoError) {
+            next->valid = false;
+            rci_active_ = false;
+            return result;
+        }
+        session = std::move(next);
+        return Result::NoError;
+    }
+
+    Result Robot::StopRciControl() {
+        auto command_lock = LockToolState();
+        auto state_lock = impl_->lockState();
+        if (!rci_enabled_) return Result::ServoNotInitialized;
+        if (!rci_active_ || impl_->is(sml::state<class STOPPING>))
+            return Result::NoError;
+        return StopMotion();
+    }
+
+    Result Robot::DisableRci() {
+        auto command_lock = LockToolState();
+        auto state_lock = impl_->lockState();
+        if (!rci_enabled_) return Result::NoError;
+        rci_closing_ = true;  // 完成停止前保持入口互斥。
+        if (rci_active_) {
+            const auto result = StopRciControl();
+            if (result != Result::NoError) rci_closing_ = false;
+            return result;
+        }
+        FinishRciControl();
+        return Result::NoError;
+    }
+
+    void Robot::FinishRciControl() {
+        rci_active_ = false;
+        if (rci_closing_.exchange(false)) rci_enabled_ = false;
+    }
+
+    nlohmann::json Robot::GetRciStatus() const {
+        auto state_lock = impl_->lockState();
+        nlohmann::json status = {{"enabled", rci_enabled_.load()},
+                {"closing", rci_closing_.load()},
+                {"control_active", rci_active_.load()},
+                {"robot_state", GetStateString()},
+                {"last_control", last_servo_status_}};
+        std::lock_guard<std::mutex> lock(mtx_);
+        if (auto* servo = dynamic_cast<MoveServo*>(motion.get()))
+            status["current_control"] = servo->GetStatus();
+        return status;
+    }
+
+    Result Robot::MoveServoing(uint16_t port,
+                               std::shared_ptr<ServoSession> session) {
+        auto command_lock = LockToolState();
+        if (IsRciEnabled()) return Result::ConflictTaskRunning;
+        return StartServo(port, std::move(session));
+    }
+
+    Result Robot::StartServo(uint16_t port, std::shared_ptr<ServoSession> session) {
+        auto command_lock = LockToolState();
+        // on_entry
+        // 同步执行；用共享结果保留具体初始化错误，避免只返回事件接受状态。
+        auto startup_result =
+            std::make_shared<Result>(Result::ServoNotInitialized);
+        data_ready_callback_ = [this, port, startup_result, session]() -> Result {
+            Frame tool;
+            const auto tool_rc = FrameRegistry::resolveTcp(
+                *frames_.snapshot(), Frame::Identity(), tool);
+            if (tool_rc != Result::NoError) { *startup_result = tool_rc; return tool_rc; }
             auto servo = std::make_unique<MoveServo>(
-                hardware.get(), model.get(), port);
+                hardware.get(), model.get(), port, servo_settings_, tool, session);
             servo->SetMode(servo_mode_);
             Result rc = servo->Reset();
+            *startup_result = rc;
             if (rc != Result::NoError) {
                 return rc;
             }
             {
                 std::lock_guard<std::mutex> lock(mtx_);
+                last_control_progress_ns_.store(ServoSession::Now());
+                servo_watchdog_armed_.store(true);
                 motion = std::move(servo);
                 executor->SwitchMotion(motion.get());
             }
@@ -1941,7 +2111,8 @@ namespace rocos {
             if (impl_->is(sml::state<class ERROR_STATE>)) return Result::Fatal;
             return Result::ConflictTaskRunning;
         }
-        return Result::NoError;
+        data_ready_callback_ = nullptr;
+        return *startup_result;
     }
 
 } // namespace rocos

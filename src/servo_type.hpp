@@ -24,6 +24,7 @@
 #include <cstdint>
 
 constexpr size_t MAX_DOF = 10;
+constexpr uint32_t SERVO_PROTOCOL_VERSION = 2;
 
 #pragma pack(push, 1)   // 强制 1 字节对齐，消除 padding
 
@@ -34,7 +35,9 @@ enum class MotionMode : uint8_t {
 };
 
 struct RobotState {     // Robot → Client, ~800+ bytes
-  uint64_t message_id;              // 单调递增，兼作时间戳
+  uint32_t protocol_version{SERVO_PROTOCOL_VERSION};
+  std::array<uint8_t, 16> session_id{};
+  uint64_t message_id;              // 回包序号，非时间戳
   std::array<double, 16> flange_to_base;    // 法兰位姿（4x4 变换矩阵，row major）
   std::array<double, 16> tcp_to_base;    // TCP位姿
 
@@ -43,15 +46,23 @@ struct RobotState {     // Robot → Client, ~800+ bytes
   std::array<double, MAX_DOF> q;        // 关节位置
   std::array<double, MAX_DOF> dq;       // 关节速度
 
+  // 0: 任意伺服故障；1: 首点；2: 通信；3: 运动约束；4..40 保留。
   std::array<bool, 41> errors;
 
 
   MotionMode mode;              // 机器人模式
-  double control_command_success_rate; // 最近 100 个指令的成功率
+  uint64_t cycle{0}, sample_time_ns{0}, source_time_us{0};
+  uint64_t received_message_id{0}, applied_message_id{0};
+  std::array<double, MAX_DOF> q_d{}, dq_d{}, ddq_d{}, q_cmd{}, tau_cmd{};
+  int8_t output_mode{0};
+  bool output_valid{false}; // 写入硬件接口成功，不代表驱动执行确认
+  double control_command_success_rate; // 最近至多 100 个控制周期收到新指令的比例
 };
 
 
 struct MotionGeneratorCommand {   // 运动生成指令
+  uint32_t protocol_version{SERVO_PROTOCOL_VERSION};
+  std::array<uint8_t, 16> session_id{};
   uint64_t message_id;
   std::array<double, 16> tcp_c;    // 笛卡尔位姿指令
   std::array<double, MAX_DOF> q_c;          // 关节位置指令

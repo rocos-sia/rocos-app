@@ -54,7 +54,14 @@ public:
     // DriveInterface — batch
     rocos::JntArray GetPosition() override { return fake_position_; }
     rocos::JntArray GetVelocity() override { return fake_velocity_; }
-    rocos::JntArray GetTorque() override { return {}; }
+    double torque_rate{1e12};
+    rocos::OutputSnapshot GetOutputSnapshot() const override {
+        return {{},last_set_torque_,last_set_mode_};
+    }
+    rocos::JntArray GetTorque() override { return rocos::JntArray(fake_position_.rows()); }
+    std::vector<rocos::JointDerivativeLimits> GetJointDerivativeLimits() const override {
+        return std::vector<rocos::JointDerivativeLimits>(fake_position_.rows(),{10,150,10,0,torque_rate,0});
+    }
     rocos::JntArray GetLoadTorque() override { return {}; }
     void SetPosition(const rocos::JntArray&) override {}
     void SetVelocity(const rocos::JntArray&) override {}
@@ -590,4 +597,20 @@ TEST_CASE("JointImpedanceController - 缺少 model 时拒绝下发") {
     CHECK(res == rocos::Result::ParameterPointerEqualsNullptr);
     CHECK(hw.set_mode_count_ == 0);
     CHECK(hw.set_torque_count_ == 0);
+}
+
+TEST_CASE("Joint impedance limits torque rate from first output and after reset") {
+    FakeHardware hw; FakeModel model;
+    hw.fake_position_=makeConstJntArray(3); hw.fake_velocity_=makeConstJntArray(3);
+    hw.torque_rate=200;
+    rocos::JointImpedanceController ctrl;
+    REQUIRE(ctrl.SetHardware(&hw)==rocos::Result::NoError);
+    REQUIRE(ctrl.SetModel(&model)==rocos::Result::NoError);
+    REQUIRE(ctrl.UpdateCmd(makeConstJntArray(3))==rocos::Result::NoError);
+    CHECK(hw.last_set_torque_(0)==doctest::Approx(.2));
+    REQUIRE(ctrl.UpdateCmd(makeConstJntArray(3,1))==rocos::Result::NoError);
+    CHECK(hw.last_set_torque_(0)==doctest::Approx(.4));
+    ctrl.Reset();
+    REQUIRE(ctrl.UpdateCmd(makeConstJntArray(3))==rocos::Result::NoError);
+    CHECK(hw.last_set_torque_(0)==doctest::Approx(.6));
 }

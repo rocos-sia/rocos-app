@@ -31,10 +31,15 @@ namespace rocos {
 // ==========================================================================
 
 ZeroForceDragController::~ZeroForceDragController() {
-    if (hardware_ != nullptr) {
-        hardware_->WaitForSignal();
-        hardware_->SetPosition(hardware_->GetPosition());
-        hardware_->SetMode(CSP_MODE);
+    try {
+        if (hardware_ != nullptr && !hardware_->SafetyStopRequested()) {
+            hardware_->WaitForSignal();
+            hardware_->SetPosition(hardware_->GetPosition());
+            hardware_->SetMode(CSP_MODE);
+        }
+
+    } catch (...) {
+        if (hardware_) hardware_->RequestSafetyStop();
     }
 }
 

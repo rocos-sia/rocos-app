@@ -36,10 +36,10 @@ private:
 };
 
 enum class LogLevel : uint8_t { Trace, Debug, Info, Warn, Error, Critical };
-enum class LogModule : uint8_t { Robot, Executor, PositionController, Model, MoveJoint, Hardware };
+enum class LogModule : uint8_t { Robot, Executor, PositionController, Model, MoveJoint, Hardware, MoveServo };
 enum class LogEventType : uint8_t {
     Result, MotionFailed, ControllerFailed, CommandFailed, CycleFailed, CycleFinished,
-    PositionLimit, VelocityLimit, ProfileFailed, EnteredError, EnteredStopped, EnteredRunning, ThreadJoinSkipped, HardwareSizeMismatch, HardwareThreadLimit
+    PositionLimit, VelocityLimit, ProfileFailed, EnteredError, EnteredStopped, EnteredRunning, ThreadJoinSkipped, HardwareSizeMismatch, HardwareThreadLimit, ServoStartPoseInvalid, ServoCommunicationFault
 };
 struct RtLogEvent {
     uint64_t elapsed_us{0}; // 启动日历基准加周期偏移，入口不读取时钟。

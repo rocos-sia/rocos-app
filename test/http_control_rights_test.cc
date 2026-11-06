@@ -223,3 +223,17 @@ TEST_CASE("Nonpositive control TTL is rejected before starting workers") {
     CHECK_THROWS_AS(rocos::RobotHttpServer(nullptr, nullptr, 0), std::invalid_argument);
     CHECK_THROWS_AS(rocos::RobotHttpServer(nullptr, nullptr, -1), std::invalid_argument);
 }
+
+TEST_CASE_FIXTURE(
+    ControlFixture,
+    "Servo start rejects malformed ports before starting a receiver") {
+    for (const auto* body :
+         {"{", "[]", "null", R"({"port":0})", R"({"port":-1})",
+          R"({"port":65536})", R"({"port":1.5})", R"({"port":"8081"})",
+          R"({"port":18446744073709551615})"}) {
+        CAPTURE(body);
+        const auto reply = post("/api/robot/servo/start", credentials, body);
+        CHECK(reply["success"] == false);
+        CHECK(reply["code"] == 1001);
+    }
+}

@@ -27,15 +27,20 @@
 namespace rocos {
 
 CartesianImpedanceController::~CartesianImpedanceController() {
-    if (hardware_ != nullptr) {
-        hardware_->WaitForSignal();
-        JntArray q_hold = hardware_->GetPosition();
-        JntArray q_generated;
-        x_des_valid_ = false;
-        x_des_from_frame_ = false;
-        tau_prev_valid_ = false;
-        static_cast<void>(GenerateCmd(Reference{q_hold}, q_generated));
-        static_cast<void>(UpdateCmd(q_hold));
+    try {
+        if (hardware_ != nullptr && !hardware_->SafetyStopRequested()) {
+            hardware_->WaitForSignal();
+            JntArray q_hold = hardware_->GetPosition();
+            JntArray q_generated;
+            x_des_valid_ = false;
+            x_des_from_frame_ = false;
+            tau_prev_valid_ = false;
+            static_cast<void>(GenerateCmd(Reference{q_hold}, q_generated));
+            static_cast<void>(UpdateCmd(q_hold));
+        }
+
+    } catch (...) {
+        if (hardware_) hardware_->RequestSafetyStop();
     }
 }
 

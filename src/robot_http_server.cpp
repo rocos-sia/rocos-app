@@ -256,6 +256,8 @@ void RobotHttpServer::runAsync(const std::string& host, int port) {
 }
 
 void RobotHttpServer::stop() {
+    { std::lock_guard<std::mutex> lock(control_mutex_);
+      if (servo_session_) servo_session_->valid.store(false); }
     if (server_) server_->stop();
     if (thread_ && thread_->joinable()) thread_->join();
 }
@@ -298,6 +300,13 @@ void RobotHttpServer::registerRoutes() {
     server_->Post("/api/robot/load_params", [this](auto& req, auto& res) { handleSetLoadParameters(req, res); });
     server_->Get("/api/robot/load_params", [this](auto& req, auto& res) { handleGetLoadParameters(req, res); });
     server_->Post("/api/robot/load_params/save", [this](auto& req, auto& res) { handleSaveLoadParameters(req, res); });
+
+    // RCI：开关沿用 HTTP 控制权；程序接入无需额外凭据。
+    server_->Post("/api/robot/rci/enable", [this](auto& req, auto& res) { handleRciEnable(req, res); });
+    server_->Post("/api/robot/rci/disable", [this](auto& req, auto& res) { handleRciDisable(req, res); });
+    server_->Post("/api/robot/rci/start", [this](auto& req, auto& res) { handleRciStart(req, res); });
+    server_->Post("/api/robot/rci/stop", [this](auto& req, auto& res) { handleRciStop(req, res); });
+    server_->Get("/api/robot/rci/status", [this](auto& req, auto& res) { handleRciStatus(req, res); });
 
     // Robot servo control
     server_->Post("/api/robot/servo/start", [this](auto& req, auto& res) { handleServoStart(req, res); });
@@ -495,7 +504,7 @@ RobotHttpServer::AuthResult RobotHttpServer::checkAndRenewToken_locked(const htt
 
     // 调试旁路：使用预设 DEBUG_TOKEN + DEBUG_CLIENT_ID 可直接控制机器人，无需 acquire。
     // 仅用于 curl/脚本调试，生产环境可注释掉此段以禁用。
-    if (allow_debug && token == DEBUG_TOKEN) {
+    if (allow_debug && (!robot_ || !robot_->IsRciEnabled()) && token == DEBUG_TOKEN) {
         const std::string req_client_id = req.get_header_value(CONTROL_CLIENT_ID_HEADER);
         if (req_client_id == DEBUG_CLIENT_ID) {
             log_ptr_->info("Debug bypass: token accepted (client_id={})", req_client_id);
@@ -532,12 +541,28 @@ RobotHttpServer::AuthResult RobotHttpServer::checkAndRenewToken_locked(const htt
     }
 
     last_seen_at_ = now;
+    if (servo_session_) servo_session_->expires_ns.store(ServoSession::Now()+int64_t(control_ttl_seconds_)*1000000000LL);
     return AuthResult::OK;
 }
 
 bool RobotHttpServer::ensureControl(const httplib::Request& req, httplib::Response& res, bool allow_debug,
                                     nlohmann::json* owner) {
     std::lock_guard<std::mutex> lock(control_mutex_);
+    if (robot_ && robot_->IsRciEnabled()) {
+        allow_debug = false;
+        const auto& path = req.path;
+        const bool allowed = path == "/api/control/heartbeat" || path == "/api/control/release" ||
+            path == "/api/robot/rci/enable" || path == "/api/robot/rci/disable" ||
+            path == "/api/robot/stop" || path == "/api/robot/servo/stop" ||
+            path == "/api/robot/jog/stop" || path == "/api/robot/disable" ||
+            path == "/api/robot/reset" || path == "/api/robot/enable" ||
+            path == "/api/robot/wait_move" || path == "/api/robot/motion/preview" ||
+            path == "/api/script/stop" || path == "/api/script/pause";
+        if (!allowed) {
+            sendJson(res, false, resultCode(Result::ConflictTaskRunning), "RCI owns the motion interface");
+            return false;
+        }
+    }
     switch (checkAndRenewToken_locked(req, allow_debug)) {
         case AuthResult::OK:
             if (owner != nullptr) *owner = controlOwnerJson_locked();
@@ -557,6 +582,7 @@ bool RobotHttpServer::ensureControl(const httplib::Request& req, httplib::Respon
 }
 
 void RobotHttpServer::clearControl_locked(const char* reason) {
+    if (servo_session_) servo_session_->valid.store(false);
     if (!current_token_.empty()) {
         log_ptr_->info("Control released (owner={}@{}:{}, reason={})",
                        current_owner_name_, current_owner_ip_, current_owner_port_, reason);
@@ -706,6 +732,11 @@ void RobotHttpServer::handleControlTakeover(const httplib::Request& req,
         ? req.get_header_value("User-Agent") : std::string{};
 
     std::lock_guard<std::mutex> lock(control_mutex_);
+    auto command_lock = robot_ ? robot_->LockToolState() : std::unique_lock<std::recursive_mutex>{};
+    if (robot_ && robot_->IsRciEnabled()) {
+        sendJson(res, false, resultCode(Result::ConflictTaskRunning), "Disable RCI before taking control");
+        return;
+    }
     if (!current_token_.empty()) {
         log_ptr_->warn("Control taken over: previous owner {}@{}:{} forcibly evicted by {}@{}:{}",
                        current_owner_name_, current_owner_ip_, current_owner_port_,
@@ -878,6 +909,7 @@ void RobotHttpServer::handleGetRobotState(const httplib::Request& req, httplib::
 
     nlohmann::json data;
     data["robot_state"] = snap.state_string;
+    if (robot_) data["rci"] = robot_->GetRciStatus();
     data["is_enabled"] = snap.is_enabled;
     data["is_running"] = snap.is_running;
     data["control_active"] = snap.control_active;
@@ -1214,24 +1246,150 @@ void RobotHttpServer::handleSaveLoadParameters(const httplib::Request& req, http
 // Servo Control Handlers
 // ============================================================================
 
+void RobotHttpServer::handleRciEnable(const httplib::Request& req,
+                                      httplib::Response& res) {
+    // 授权与开启串行，避免 release/takeover 插入两者之间。
+    std::lock_guard<std::mutex> lock(control_mutex_);
+    const auto auth = checkAndRenewToken_locked(req, false);
+    if (auth != AuthResult::OK) {
+        sendJson(res, false, auth == AuthResult::MissingToken ? 3006 : 3007,
+                 "Control right required to enable RCI");
+        return;
+    }
+    if (!robot_) {
+        sendJson(res, false, resultCode(Result::ResourceUnavailable),
+                 "Robot unavailable");
+        return;
+    }
+    const auto result = robot_->EnableRci();
+    sendJson(res, resultSucceeded(result), resultCode(result),
+             resultSucceeded(result) ? "RCI enabled" : "RCI enable failed",
+             robot_->GetRciStatus());
+}
+
+void RobotHttpServer::handleRciDisable(const httplib::Request& req,
+                                       httplib::Response& res) {
+    std::lock_guard<std::mutex> lock(control_mutex_);
+    const auto auth = checkAndRenewToken_locked(req, false);
+    if (auth != AuthResult::OK) {
+        sendJson(res, false, auth == AuthResult::MissingToken ? 3006 : 3007,
+                 "Control right required to disable RCI");
+        return;
+    }
+    if (!robot_) {
+        sendJson(res, false, resultCode(Result::ResourceUnavailable),
+                 "Robot unavailable");
+        return;
+    }
+    const auto result = robot_->DisableRci();
+    sendJson(res, resultSucceeded(result), resultCode(result),
+             resultSucceeded(result) ? "RCI disable requested"
+                                     : "RCI disable failed",
+             robot_->GetRciStatus());
+}
+
+void RobotHttpServer::handleRciStart(const httplib::Request& req,
+                                     httplib::Response& res) {
+    // UDP 目前只绑定 loopback，避免远程 HTTP 客户端占用无法访问的会话。
+    if (req.remote_addr != "127.0.0.1" && req.remote_addr != "::1" &&
+        req.remote_addr != "::ffff:127.0.0.1") {
+        sendJson(res, false, resultCode(Result::IllegalParameter),
+                 "RCI control currently requires a local client");
+        return;
+    }
+    const auto body = req.body.empty()
+                          ? nlohmann::json::object()
+                          : nlohmann::json::parse(req.body, nullptr, false);
+    if (!body.is_object() ||
+        (body.contains("port") &&
+         (!body["port"].is_number_integer() || body["port"] <= 0 ||
+          body["port"] > 65535)) ||
+        (body.contains("mode") &&
+         (!body["mode"].is_string() ||
+          (body["mode"] != "joint" && body["mode"] != "cartesian")))) {
+        sendJson(res, false, 1001,
+                 "Expected port 1..65535 and mode joint or cartesian");
+        return;
+    }
+    if (!robot_) {
+        sendJson(res, false, resultCode(Result::ResourceUnavailable),
+                 "Robot unavailable");
+        return;
+    }
+    std::shared_ptr<ServoSession> session;
+    const auto port = body.value("port", uint16_t{8081});
+    const auto result = robot_->StartRciControl(
+        session, port, body.value("mode", std::string{"joint"}));
+    auto data = robot_->GetRciStatus();
+    if (resultSucceeded(result)) {
+        data["port"] = port;
+        data["session_id"] = session->Hex();
+        data["protocol_version"] = SERVO_PROTOCOL_VERSION;
+    }
+    sendJson(res, resultSucceeded(result), resultCode(result),
+             resultSucceeded(result) ? "RCI control started"
+                                     : "RCI control rejected",
+             data);
+}
+
+void RobotHttpServer::handleRciStop(const httplib::Request&,
+                                    httplib::Response& res) {
+    if (!robot_) {
+        sendJson(res, false, resultCode(Result::ResourceUnavailable),
+                 "Robot unavailable");
+        return;
+    }
+    // 仅停止 RCI，不授予任何运动权限；监控端无需控制 token 即可停止。
+    const auto result = robot_->StopRciControl();
+    sendJson(res, resultSucceeded(result), resultCode(result),
+             resultSucceeded(result) ? "RCI stop requested" : "RCI stop failed",
+             robot_->GetRciStatus());
+}
+
+void RobotHttpServer::handleRciStatus(const httplib::Request&,
+                                      httplib::Response& res) {
+    if (!robot_) {
+        sendJson(res, false, resultCode(Result::ResourceUnavailable),
+                 "Robot unavailable");
+        return;
+    }
+    sendJson(res, true, 0, "ok", robot_->GetRciStatus());
+}
+
 void RobotHttpServer::handleServoStart(const httplib::Request& req, httplib::Response& res) {
     log_ptr_->info("POST /api/robot/servo/start");
-    if (!ensureControl(req, res)) return;
-
-    nlohmann::json body = nlohmann::json::parse(req.body, nullptr, false);
-    uint16_t port = 8081;
-    if (!body.is_discarded() && body.contains("port") && body["port"].is_number()) {
-        int p = body["port"].get<int>();
-        if (p > 0 && p <= 65535) {
-            port = static_cast<uint16_t>(p);
-        }
+    // 验证、启动与发布会话共用控制权锁，避免抢占与启动交错。
+    std::lock_guard<std::mutex> control_lock(control_mutex_);
+    const auto auth=checkAndRenewToken_locked(req,false);
+    if (auth!=AuthResult::OK) {
+        sendJson(res,false,auth==AuthResult::MissingToken?3006:3007,"control token missing, invalid or expired"); return;
     }
 
-    const Result result = robot_->MoveServoing(port);
+    const auto body = req.body.empty()
+                          ? nlohmann::json::object()
+                          : nlohmann::json::parse(req.body, nullptr, false);
+    if (!body.is_object() || (body.contains("port") &&
+                              (!body["port"].is_number_integer() ||
+                               body["port"] <= 0 || body["port"] > 65535))) {
+        sendJson(res, false, 1001,
+                 "Invalid JSON or UDP port (expected integer 1..65535)");
+        return;
+    }
+    const auto port = body.value("port", uint16_t{8081});
+
+    auto session=std::make_shared<ServoSession>();
+    session->expires_ns.store(ServoSession::Now()+int64_t(control_ttl_seconds_)*1000000000LL);
+    const Result result = robot_->MoveServoing(port,session);
+    if (resultSucceeded(result)) servo_session_=session;
+    else session->valid.store(false);
     nlohmann::json data;
     data["robot_state"] = robot_->GetStateString();
     data["control_active"] = robot_->IsControlActive();
     data["port"] = port;
+    if (resultSucceeded(result)) {
+        data["session_id"]=session->Hex();
+        data["protocol_version"]=SERVO_PROTOCOL_VERSION;
+    }
 
     sendJson(res, resultSucceeded(result), resultCode(result),
              resultSucceeded(result) ? "Servo mode started"
