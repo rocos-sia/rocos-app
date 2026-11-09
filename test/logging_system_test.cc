@@ -354,3 +354,25 @@ TEST_CASE("Filesystem write and flush errors stay isolated from alert processing
     REQUIRE(until([&] { return logs.metrics()["file_failures"].get<uint64_t>() > 0; }));
     CHECK(logs.snapshot().status == 503);
 }
+
+TEST_CASE("Servo guard messages identify the comparison and numerical threshold") {
+    Temp temp;
+    LogManager logs(temp.config());
+    const std::vector<std::pair<LogEventType, std::string>> cases{
+        {LogEventType::ServoIkDiscontinuity, "previous_accepted_ik="},
+        {LogEventType::ServoReferenceDeviation, "limited_reference="},
+        {LogEventType::ServoFeedbackPosition, "servo_feedback_position_error:"},
+        {LogEventType::ServoFeedbackVelocity, "servo_feedback_velocity_error:"}};
+    for (const auto& item : cases)
+        logs.submitEvent({1700000000000000, 12, item.first, LogLevel::Error, LogModule::MoveServo,
+                          -2314, 1, .1, .02, .003});
+    REQUIRE(until([&] { return logs.query("", 100)["events"].size() == cases.size(); }));
+    const auto events = logs.query("", 100)["events"];
+    for (size_t i = 0; i < cases.size(); ++i) {
+        const auto text = events[i]["message"].get<std::string>();
+        CHECK(text.find(cases[i].second) != std::string::npos);
+        CHECK(text.find("joint 2") != std::string::npos);
+        CHECK(text.find("limit=0.003000000") != std::string::npos);
+        CHECK(text.find("0.080000000") != std::string::npos);
+    }
+}

@@ -217,10 +217,13 @@ void MoveServo::beginStop(Result reason) {
     if (stopping_) return;
     stopping_ = true;
     stop_reason_ = reason;
-    if (reason != Result::NoError)
+    if (reason == Result::LostHeartbeat)
         emitLogEvent(LogEventType::ServoCommunicationFault, LogModule::MoveServo,
                      static_cast<int>(reason), -1, communication_.SuccessRate(),
                      communication_.MissingCycles(), settings_.minimum_success_rate);
+    else if (reason != Result::NoError)
+        emitLogEvent(LogEventType::ServoGuardStop, LogModule::MoveServo,
+                     static_cast<int>(reason));
 }
 
 Result MoveServo::processStop(Reference& ref_out) {
@@ -282,9 +285,18 @@ Result MoveServo::GenerateRef(Reference& ref_out) {
     if (session_ && !session_->Active() && !stopping_) beginStop(Result::LostHeartbeat);
     const auto feedback_rc=hw_->ReadFeedbackSnapshot(cycle_feedback_);
     if (feedback_rc!=Result::NoError) return fail(feedback_rc);
+    // 运动中由下面的分类检查报告跟随误差；制动中保留原有位置跟随硬保护。
     const auto validation=ValidateFeedback(*model_,*hw_,cycle_feedback_,
-                                           processor_ready_?&processor_.Position():nullptr);
-    if (validation!=Result::NoError) return fail(validation);
+                                           processor_ready_ && stopping_ ? &processor_.Position() : nullptr);
+    if (validation!=Result::NoError) {
+        emitLogEvent(LogEventType::ServoFeedbackInvalid, LogModule::MoveServo,
+                     static_cast<int>(validation));
+        return fail(validation);
+    }
+    if (processor_ready_ && !stopping_) {
+        const auto tracking = processor_.CheckFeedback(cycle_feedback_.position, cycle_feedback_.velocity);
+        if (tracking != Result::NoError) beginStop(tracking);
+    }
     if (stopping_) return processStop(ref_out);
     if (stopped_.load()) {
         const auto rc = fillCurrentReference(ref_out);
@@ -344,6 +356,10 @@ Result MoveServo::GenerateRef(Reference& ref_out) {
     }
     JntArray output;
     rc = processor_.Step(candidate, false, output);
+    if (rc == Result::IkTrack || rc == Result::MotionLimit || rc == Result::IkCalcFail) {
+        beginStop(rc);
+        return processStop(ref_out);
+    }
     if (rc != Result::NoError) return fail(rc);
     auto coupled = output;
     rc = hw_->ApplyPositionCoupling(coupled);

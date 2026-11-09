@@ -184,8 +184,11 @@ Result ModelInterface::LimitServoJointStep(
         std::min({l.acceleration, s.acceleration + l.jerk * dt,
                   (l.jerk / l.acceleration) * (upper - s.velocity)});
     if (lo > hi) return Result::MotionLimit;
-    next.acceleration =
-        std::clamp((desired_velocity - s.velocity) / dt, lo, hi);
+    const double desired_jerk =
+        ((desired_velocity - s.velocity) / dt - s.acceleration) / dt;
+    const double jerk_limited_acceleration =
+        s.acceleration + std::clamp(desired_jerk, -l.jerk, l.jerk) * dt;
+    next.acceleration = std::clamp(jerk_limited_acceleration, lo, hi);
     next.velocity = s.velocity + next.acceleration * dt;
     next.position = s.position + next.velocity * dt;
     return Result::NoError;
@@ -197,14 +200,57 @@ Result ModelInterface::LimitServoPositionStep(
         !std::isfinite(l.acceleration) || l.acceleration <= 0 ||
         !std::isfinite(l.jerk) || l.jerk <= 0)
         return Result::IllegalParameter;
-    // 三阶阻尼反馈：(D+w)^3 q = w^3 target。速度、加速度参与减速，
-    // 不再把每次剩余位置误差当成必须在一个周期内消除的速度跳变。
-    // w*dt <= 0.1，且时间尺度不短于加速度经 jerk 限制变化所需时间。
-    const double w = std::min(0.1 / dt, 0.5 * l.jerk / l.acceleration);
-    const double jerk = w*w*w*(target-s.position) -
+    if (axis >= static_cast<unsigned int>(GetJointNum()) ||
+        GetVelocityLimit().rows() != GetJointNum())
+        return Result::UnmatchedJointsNumber;
+    // 按误差和运动状态分配导数预算，不再用 J/A 固定所有轨迹的带宽。
+    // 三个反馈项各占至多 J/3；加速度和速度仍由后续安全投影约束。
+    // 小误差时提高响应速度；速度/加速度较大时提前降低增益，避免饱和后振荡。
+    const double error = target - s.position;
+    double w = 0.1 / dt;
+    if (std::abs(error) > 0) {
+        w = std::min(w, std::cbrt(l.jerk / (3 * std::abs(error))));
+    }
+    if (std::abs(s.velocity) > 0)
+        w = std::min(w, std::sqrt(l.jerk / (9 * std::abs(s.velocity))));
+    if (std::abs(s.acceleration) > 0)
+        w = std::min(w, l.jerk / (9 * std::abs(s.acceleration)));
+    const double jerk = w*w*w*error -
                         3*w*w*s.velocity - 3*w*s.acceleration;
     const double desired_velocity = s.velocity + dt*(s.acceleration + dt*jerk);
     return LimitServoJointStep(axis, desired_velocity, s, l, dt, next);
+}
+
+Result ModelInterface::LimitServoReferenceStep(
+    unsigned int axis, const ServoJointState& reference,
+    const ServoJointState& reference_next, const ServoJointState& s,
+    const JointDerivativeLimits& l, double dt, ServoJointState& next) const {
+    if (!std::isfinite(dt) || dt <= 0 || !std::isfinite(reference.position) ||
+        !std::isfinite(reference.velocity) ||
+        !std::isfinite(reference.acceleration) ||
+        !std::isfinite(reference_next.position) ||
+        !std::isfinite(reference_next.velocity) ||
+        !std::isfinite(reference_next.acceleration))
+        return Result::IllegalParameter;
+    if (std::abs(reference_next.position - reference.position -
+                 dt * reference_next.velocity) > 1e-9 ||
+        std::abs(reference_next.velocity - reference.velocity -
+                 dt * reference_next.acceleration) > 1e-9)
+        return Result::IllegalParameter;
+    // 与 a+=h*j, v+=h*a, q+=h*v 一致的三重离散极点 exp(-80*h)。
+    // 前馈提供目标运动；反馈只纠正误差，不能对目标速度本身施加阻尼。
+    const double d = -std::expm1(-80 * dt);
+    const double rho = 1 - d;
+    const double kp = std::pow(d / dt, 3);
+    const double kv = (d / dt) * (d / dt) * (1 + 2 * rho);
+    const double ka = -std::expm1(-240 * dt) / dt;
+    const double jerk =
+        (reference_next.acceleration - reference.acceleration) / dt -
+        kp * (s.position - reference.position) -
+        kv * (s.velocity - reference.velocity) -
+        ka * (s.acceleration - reference.acceleration);
+    return LimitServoJointStep(
+        axis, s.velocity + dt * (s.acceleration + dt * jerk), s, l, dt, next);
 }
 
 Result ModelInterface::MakeServoBrake(unsigned int axis,

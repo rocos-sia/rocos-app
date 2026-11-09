@@ -32,8 +32,12 @@ class FakeHardware : public rocos::HardwareInterface {
         feedback_entered = true;
         gate_cv.notify_all();
         gate_cv.wait(lock, [this] { return !feedback_paused; });
-        return rocos::JntArray(fake_position_.rows());
+        auto velocity = rocos::JntArray(fake_position_.rows());
+        velocity(0) = feedback_velocity0;
+        return velocity;
     }
+    double feedback_velocity0{0};
+    void setFeedbackPosition(const rocos::JntArray& position) { fake_position_ = position; }
     uint32_t GetDt() const override { return dt_us; }
     uint32_t dt_us{1000};
     std::vector<rocos::JointDerivativeLimits> GetJointDerivativeLimits() const override {
@@ -102,6 +106,9 @@ class FakeModel : public rocos::ModelInterface {
   }
   rocos::JntArray lower, upper, velocity;
   rocos::Result ik_result{rocos::Result::NoError};
+  int ik_calls{0};
+  rocos::Frame last_ik_pose;
+  rocos::JntArray forced_ik, last_ik_seed;
   const rocos::JntArray& GetPosLowerLimit() const override { return lower; }
   const rocos::JntArray& GetPosUpperLimit() const override { return upper; }
   const rocos::JntArray& GetVelocityLimit() const override { return velocity; }
@@ -111,11 +118,15 @@ class FakeModel : public rocos::ModelInterface {
       return rocos::Result::NoError;
     }
 
-    rocos::Result InverseKinematics(const rocos::JntArray&,
+    rocos::Result InverseKinematics(const rocos::JntArray& seed,
                                     const rocos::Frame& pose,
                                     rocos::JntArray& q) override {
+        ++ik_calls;
+        last_ik_pose = pose;
+        last_ik_seed = seed;
         q.resize(3);
         for (unsigned int i = 0; i < 3; ++i) q(i) = pose.p(i);
+        if (forced_ik.rows() == 3) q = forced_ik;
         return ik_result;
     }
 
@@ -355,6 +366,10 @@ TEST_CASE_FIXTURE(
     auto cmd = jointCommand(1, 0.0005);
     auto expected = Result::NoError;
     SUBCASE("reachable near pose") {}
+    SUBCASE("reachable pose outside start tolerance") {
+        cmd = jointCommand(1, .1);
+        expected = Result::HomePositionError;
+    }
     SUBCASE("unreachable pose") {
         model.ik_result = Result::IkCalcFail;
         expected = Result::IkCalcFail;
@@ -586,7 +601,7 @@ TEST_CASE("Servo sustained low quality stops even without a long loss burst") {
     CHECK(move.GetDiagnostics().missing_cycles < 20);
 }
 
-TEST_CASE("Servo cartesian commands include the active tool and reject raw IK failures") {
+TEST_CASE("Servo cartesian first point checks the active tool independently of one Step IK") {
     FakeHardware hw(makeJntArray(0, 0, 0));
     FakeModel model;
     const auto port = freePort();
@@ -604,6 +619,86 @@ TEST_CASE("Servo cartesian commands include the active tool and reject raw IK fa
     REQUIRE(move.GenerateRef(ref) == Result::NoError);
     REQUIRE(std::holds_alternative<rocos::JntArray>(ref));
     CHECK(std::get<rocos::JntArray>(ref)(0) == doctest::Approx(0));
+    CHECK(model.ik_calls == 2);  // 一次独立首点检查，一次滤波后的周期求解。
+    REQUIRE(move.GenerateRef(ref) == Result::NoError);
+    CHECK(model.ik_calls == 3);
+}
+
+TEST_CASE("Servo Cartesian Step filters before one IK and propagates failures") {
+    FakeModel model;
+    rocos::ServoSignalProcessor processor;
+    rocos::ServoSettings settings;
+    REQUIRE(processor.Reset(&model,
+                            std::vector<rocos::JointDerivativeLimits>(3, {10, 150, 10, 0}),
+                            makeJntArray(0, 0, 0), .001, settings) == Result::NoError);
+    const double alpha = .001 / (.001 + 1.0 / (2.0 * std::acos(-1.0) * settings.cutoff_hz));
+    rocos::Frame target(rocos::Rotation::RotZ(.01), rocos::Vector(.001, 0, 0));
+    rocos::JntArray output;
+    REQUIRE(processor.Step(rocos::Frame::Identity(), false, output) == Result::NoError);
+    REQUIRE(processor.Step(target, false, output) == Result::NoError);
+    CHECK(model.ik_calls == 2);
+    CHECK(model.last_ik_pose.p.x() == doctest::Approx(alpha * .001));
+    CHECK(model.last_ik_pose.M.GetRot().Norm() == doctest::Approx(alpha * .01));
+    const auto previous = processor.Position();
+    model.ik_result = Result::IkCalcFail;
+    CHECK(processor.Step(target, false, output) == Result::IkCalcFail);
+    CHECK(model.ik_calls == 3);
+    CHECK((processor.Position().data - previous.data).norm() == 0);
+    target.M(0, 0) = 2;
+    CHECK(processor.Step(target, false, output) == Result::IllegalParameter);
+    CHECK(model.ik_calls == 3);
+    target.p(0) = std::numeric_limits<double>::quiet_NaN();
+    CHECK(processor.Step(target, false, output) == Result::ParameterNanOrInf);
+    CHECK(model.ik_calls == 3);
+    REQUIRE(processor.Step(previous, true, output) == Result::NoError);
+    CHECK(model.ik_calls == 3);
+}
+
+TEST_CASE("Servo Cartesian first order filter preserves command history across IK residuals") {
+    const double pi = std::acos(-1.);
+    for (bool enabled : {false, true}) {
+        for (double cutoff : {100., 1000., 1500.}) {
+            FakeModel model;
+            model.forced_ik = makeJntArray(0, 0, 0);
+            rocos::ServoSettings settings;
+            settings.lowpass_enabled = enabled;
+            settings.rate_limit_enabled = false;
+            settings.cutoff_hz = cutoff;
+            rocos::ServoSignalProcessor processor;
+            REQUIRE(processor.Reset(
+                &model, std::vector<rocos::JointDerivativeLimits>(3, {10, 150, 10, 0}),
+                makeJntArray(0, 0, 0), .001, settings) == Result::NoError);
+            const double alpha = enabled && cutoff < 1000
+                ? .001 / (.001 + 1 / (2 * pi * cutoff)) : 1;
+            rocos::JntArray output;
+            double position = .0001, angle = pi - .01;
+            REQUIRE(processor.Step(rocos::Frame(rocos::Rotation::RotZ(angle),
+                                               rocos::Vector(position, 0, 0)),
+                                   false, output) == Result::NoError);
+            CHECK(model.last_ik_pose.p.x() == doctest::Approx(position));
+            for (int k = 0; k < 8; ++k) {
+                const rocos::Frame target(rocos::Rotation::RotZ(-pi + .01),
+                                          rocos::Vector(.0002, 0, 0));
+                const int before = model.ik_calls;
+                REQUIRE(processor.Step(target, false, output) == Result::NoError);
+                CHECK(model.ik_calls == before + 1);
+                position += alpha * (.0002 - position);
+                angle += alpha * (pi + .01 - angle);
+                CHECK(model.last_ik_pose.p.x() == doctest::Approx(position).epsilon(1e-12));
+                CHECK(model.last_ik_pose.M.data.isApprox(
+                    rocos::Rotation::RotZ(angle).data, 1e-12));
+                model.ik_result = Result::IkCalcFail;
+                CHECK(processor.Step(rocos::Frame::Identity(), false, output) == Result::IkCalcFail);
+                model.ik_result = Result::NoError;
+            }
+            REQUIRE(processor.Reset(
+                &model, std::vector<rocos::JointDerivativeLimits>(3, {10, 150, 10, 0}),
+                makeJntArray(0, 0, 0), .001, settings) == Result::NoError);
+            REQUIRE(processor.Step(rocos::Frame::Identity(), false, output) == Result::NoError);
+            CHECK(model.last_ik_pose.p.Norm() == 0);
+            CHECK(model.last_ik_pose.M.data.isIdentity(1e-12));
+        }
+    }
 }
 
 TEST_CASE("Servo approaches position limits within the model braking envelope") {
@@ -734,6 +829,60 @@ TEST_CASE("Servo regression small targets converge without self-excited motion")
     }
 }
 
+TEST_CASE("Servo adaptive tracking reduces smooth trajectory lag across control periods") {
+    FakeModel model;
+    model.velocity.data.setConstant(3);
+    const rocos::JointDerivativeLimits limits{10, 150, 10, 0};
+    for (double dt : {.0005, .001, .002}) {
+        rocos::ServoJointState state{};
+        double peak_error = 0;
+        for (int k = 0; k < static_cast<int>(20 / dt); ++k) {
+            const double t = k * dt;
+            const double target = .01 * std::sin(2 * std::acos(-1.) * .05 * t) *
+                std::pow(std::sin(std::min(t / 5., 1.) * std::acos(-1.) / 2), 2);
+            rocos::ServoJointState next;
+            REQUIRE(model.LimitServoPositionStep(0, target, state, limits, dt, next) == Result::NoError);
+            CHECK(std::abs(next.velocity) <= 3);
+            CHECK(std::abs(next.acceleration) <= limits.acceleration);
+            CHECK(std::abs(next.acceleration - state.acceleration) <= limits.jerk * dt + 1e-10);
+            CHECK(next.position - state.position == doctest::Approx(next.velocity * dt).epsilon(1e-10));
+            rocos::ServoBrake brake;
+            REQUIRE(model.MakeServoBrake(0, next, limits, dt, brake) == Result::NoError);
+            peak_error = std::max(peak_error, std::abs(next.position - target));
+            state = next;
+        }
+        CAPTURE(dt);
+        CAPTURE(peak_error);
+        // 旧固定带宽在同一轨迹约 1.5e-3 rad，不能仅以“不报错”验收。
+        CHECK(peak_error < .0003);
+    }
+}
+
+TEST_CASE("Servo adaptive tracking settles repeated small targets and reversals") {
+    FakeModel model;
+    model.velocity.data.setConstant(3);
+    for (double dt : {.0005, .001, .002}) {
+        for (double magnitude : {1e-6, .00297, .01}) {
+            rocos::ServoJointState state{};
+            for (double target : {magnitude, -magnitude, 0.}) {
+                for (int k = 0; k < static_cast<int>(2 / dt); ++k) {
+                    rocos::ServoJointState next;
+                    REQUIRE(model.LimitServoPositionStep(0, target, state, {10, 150, 10, 0}, dt, next) == Result::NoError);
+                    CHECK(std::abs(next.position) <= magnitude + 1e-7);
+                    CHECK(std::abs(next.acceleration - state.acceleration) <= 150 * dt + 1e-10);
+                    state = next;
+                }
+                CAPTURE(dt);
+                CAPTURE(magnitude);
+                CAPTURE(target);
+                CHECK(std::abs(state.position - target) < 1e-9);
+                CHECK(std::abs(state.velocity) < 1e-9);
+                CHECK(std::abs(state.acceleration) < 1e-9);
+            }
+        }
+    }
+}
+
 TEST_CASE("Servo regression waiting reference equals nonzero actual position") {
     FakeHardware hw(makeJntArray(1,2,3)); FakeModel model;
     const auto port=freePort(); rocos::MoveServo move(&hw,&model,port);
@@ -767,4 +916,309 @@ TEST_CASE("Servo communication separates scheduling lateness from missing comman
     for(int k=0;k<20;++k) c.RecordCycle(false,1000000,1000000);
     CHECK(c.MissingCycles()==20);
     CHECK(c.SuccessRate()==doctest::Approx(.8));
+}
+
+TEST_CASE("Servo rejects discontinuous IK without advancing accepted seed or reference") {
+    FakeModel model;
+    rocos::ServoSignalProcessor processor;
+    REQUIRE(processor.Reset(&model, std::vector<rocos::JointDerivativeLimits>(3, {10, 150, 10, 0}),
+                            makeJntArray(0, 0, 0), .001, {}) == Result::NoError);
+    rocos::JntArray output;
+    const auto target = rocos::Frame::Identity();
+    model.forced_ik = makeJntArray(.0008, 0, 0);
+    REQUIRE(processor.Step(target, false, output) == Result::NoError);
+    const auto q = processor.Position(), v = processor.Velocity(), a = processor.Acceleration();
+    model.forced_ik = makeJntArray(.1, 0, 0);
+    CHECK(processor.Step(target, false, output) == Result::IkTrack);
+    CHECK(model.ik_calls == 2);
+    CHECK(model.last_ik_seed(0) == doctest::Approx(.0008));
+    CHECK((processor.Position().data-q.data).norm() == 0);
+    CHECK((processor.Velocity().data-v.data).norm() == 0);
+    CHECK((processor.Acceleration().data-a.data).norm() == 0);
+    model.forced_ik = makeJntArray(.0016, 0, 0);
+    REQUIRE(processor.Step(target, false, output) == Result::NoError);
+    CHECK(model.last_ik_seed(0) == doctest::Approx(.0008));
+}
+
+TEST_CASE("Servo rejects accumulated IK reference deviation despite continuous candidates") {
+    FakeModel model;
+    rocos::ServoSignalProcessor processor;
+    REQUIRE(processor.Reset(&model, std::vector<rocos::JointDerivativeLimits>(3, {10, 150, 10, 0}),
+                            makeJntArray(0, 0, 0), .001, {}) == Result::NoError);
+    rocos::JntArray output;
+    bool rejected = false;
+    for (int k = 1; k <= 50; ++k) {
+        model.forced_ik = makeJntArray(k*.0009, 0, 0);
+        const auto before = processor.Position();
+        const auto rc = processor.Step(rocos::Frame::Identity(), false, output);
+        if (rc == Result::MotionLimit) {
+            CHECK((processor.Position().data-before.data).norm() == 0);
+            rejected = true;
+            break;
+        }
+        REQUIRE(rc == Result::NoError);
+    }
+    CHECK(rejected);
+    for (int k = 0; k < 2000 && !processor.AtRest(); ++k)
+        REQUIRE(processor.Step(processor.Position(), true, output) == Result::NoError);
+    CHECK(processor.AtRest());
+}
+
+TEST_CASE("Servo continuity tolerance scales with control period") {
+    for (double dt : {.001, .002}) {
+        FakeModel model;
+        rocos::ServoSignalProcessor processor;
+        REQUIRE(processor.Reset(&model, std::vector<rocos::JointDerivativeLimits>(3, {10, 150, 10, 0}),
+                                makeJntArray(0, 0, 0), dt, {}) == Result::NoError);
+        model.forced_ik = makeJntArray(.0015, 0, 0);
+        rocos::JntArray output;
+        CHECK(processor.Step(rocos::Frame::Identity(), false, output) ==
+              (dt == .001 ? Result::IkTrack : Result::NoError));
+    }
+}
+
+TEST_CASE("Servo validates position and velocity following separately") {
+    FakeModel model;
+    rocos::ServoSignalProcessor processor;
+    auto limits = std::vector<rocos::JointDerivativeLimits>(3, {10, 150, 10, 0});
+    REQUIRE(processor.Reset(&model, limits, makeJntArray(0, 0, 0), .001, {}) == Result::NoError);
+    CHECK(processor.CheckFeedback(makeJntArray(.019, 0, 0), makeJntArray(.19, 0, 0)) == Result::NoError);
+    CHECK(processor.CheckFeedback(makeJntArray(.021, 0, 0), makeJntArray(0, 0, 0)) == Result::NotFollowPositionCmd);
+    CHECK(processor.CheckFeedback(makeJntArray(0, 0, 0), makeJntArray(.21, 0, 0)) == Result::OutRangeFeedback);
+    limits[0].following_error = .005;
+    REQUIRE(processor.Reset(&model, limits, makeJntArray(0, 0, 0), .001, {}) == Result::NoError);
+    CHECK(processor.CheckFeedback(makeJntArray(.006, 0, 0), makeJntArray(0, 0, 0)) == Result::NotFollowPositionCmd);
+}
+
+TEST_CASE("Servo rejects infeasible Cartesian output without modifying the brake state") {
+    FakeModel model;
+    rocos::ServoSignalProcessor processor;
+    rocos::ServoSettings settings;
+    settings.rate_limit_enabled = false;
+    REQUIRE(processor.Reset(&model, std::vector<rocos::JointDerivativeLimits>(3, {10, 150, 10, 0}),
+                            makeJntArray(0, 0, 0), .001, settings) == Result::NoError);
+    model.forced_ik = makeJntArray(0, .001, 0); // 连续且在偏离限值内，但加速度不可行。
+    rocos::JntArray output;
+    CHECK(processor.Step(rocos::Frame::Identity(), false, output) == Result::MotionLimit);
+    CHECK(processor.AtRest());
+    REQUIRE(processor.Step(processor.Position(), true, output) == Result::NoError);
+    CHECK(output.data.norm() == 0);
+}
+
+TEST_CASE_FIXTURE(ServoFixture, "Servo latches IK continuity fault and brakes before reporting it") {
+    REQUIRE(move.SetMode(MotionMode::kCartesianPosition) == Result::NoError);
+    exchange(jointCommand(1));
+    REQUIRE(move.GenerateRef(ref) == Result::NoError);
+    model.forced_ik = makeJntArray(.0008, 0, 0);
+    REQUIRE(move.GenerateRef(ref) == Result::NoError);
+    const int before = model.ik_calls;
+    model.forced_ik = makeJntArray(.1, 0, 0);
+    REQUIRE(move.GenerateRef(ref) == Result::NoError);
+    REQUIRE(move.GetDiagnostics().stopping);
+    CHECK(move.GetDiagnostics().fault == Result::IkTrack);
+    Result rc = Result::NoError;
+    for (int i = 0; i < 2000 && rc == Result::NoError; ++i) rc = move.GenerateRef(ref);
+    CHECK(rc == Result::IkTrack);
+    CHECK(model.ik_calls == before + 1);
+    CHECK(move.GetDiagnostics().desired_velocity.data.norm() == 0);
+    CHECK(move.GetDiagnostics().desired_acceleration.data.norm() == 0);
+}
+
+TEST_CASE_FIXTURE(ServoFixture, "Servo latches actual feedback tracking faults separately from communication") {
+    exchange(jointCommand(1));
+    REQUIRE(move.GenerateRef(ref) == Result::NoError);
+    Result expected;
+    SUBCASE("actual position lag") {
+        hw.setFeedbackPosition(makeJntArray(.021, 0, 0));
+        expected = Result::NotFollowPositionCmd;
+    }
+    SUBCASE("actual velocity lag") {
+        hw.feedback_velocity0 = .21;
+        expected = Result::OutRangeFeedback;
+    }
+    REQUIRE(move.GenerateRef(ref) == Result::NoError);
+    CHECK(move.GetDiagnostics().stopping);
+    CHECK(move.GetDiagnostics().fault == expected);
+    CHECK(move.GenerateRef(ref) == expected);
+}
+
+TEST_CASE_FIXTURE(ServoFixture, "Servo retains position following protection while braking") {
+    exchange(jointCommand(1));
+    REQUIRE(move.GenerateRef(ref) == Result::NoError);
+    exchange(jointCommand(2, .0005));
+    REQUIRE(move.GenerateRef(ref) == Result::NoError);
+    REQUIRE(move.Stop() == Result::NoError);
+    hw.setFeedbackPosition(makeJntArray(.03, 0, 0));
+    CHECK(move.GenerateRef(ref) == Result::NotFollowPositionCmd);
+}
+
+TEST_CASE(
+    "Servo feedforward tracks a feasible discrete reference without extra "
+    "lag") {
+    FakeModel model;
+    model.velocity.data.setConstant(3);
+    const rocos::JointDerivativeLimits limits{10, 150, 10, 0};
+    for (double dt : {.0005, .001, .002}) {
+        for (double initial_error : {0., 1e-6}) {
+            rocos::ServoJointState reference{}, state{initial_error, 0, 0};
+            double steady_error = 0;
+            for (int k = 1; k <= static_cast<int>(5 / dt); ++k) {
+                const double t = k * dt, u = std::min(t, 1.);
+                const double ramp = u * u * u * (10 + u * (-15 + 6 * u));
+                rocos::ServoJointState desired;
+                desired.position =
+                    .02 * std::sin(2 * std::acos(-1.) * t) * ramp;
+                desired.velocity = (desired.position - reference.position) / dt;
+                desired.acceleration =
+                    (desired.velocity - reference.velocity) / dt;
+                rocos::ServoJointState next;
+                REQUIRE(model.LimitServoReferenceStep(0, reference, desired,
+                                                      state, limits, dt,
+                                                      next) == Result::NoError);
+                REQUIRE(std::abs(next.velocity) <= 3);
+                REQUIRE(std::abs(next.acceleration) <= 10);
+                REQUIRE(std::abs(next.acceleration - state.acceleration) <=
+                        150 * dt + 1e-9);
+                rocos::ServoBrake brake;
+                REQUIRE(model.MakeServoBrake(0, next, limits, dt, brake) ==
+                        Result::NoError);
+                if (t > 1)
+                    steady_error =
+                        std::max(steady_error,
+                                 std::abs(next.position - desired.position));
+                state = next;
+                reference = desired;
+            }
+            CAPTURE(dt);
+            CAPTURE(initial_error);
+            CHECK(steady_error < 1e-10);
+        }
+    }
+}
+
+TEST_CASE(
+    "Servo single IK rate limiter tolerates repeated noisy targets and "
+    "settles") {
+    FakeModel model;
+    model.velocity.data.setConstant(3);
+    // Talon 伺服轨迹测试统一使用 J=10000 rad/s^3 基线。
+    constexpr double jerk = 10000;
+    CAPTURE(jerk);
+    for (int update_cycles : {1, 2, 5}) {
+        rocos::ServoSignalProcessor processor;
+        REQUIRE(
+            processor.Reset(
+                &model,
+                std::vector<rocos::JointDerivativeLimits>(3, {10, jerk, 10, 0}),
+                makeJntArray(0, 0, 0), .001, {}) == Result::NoError);
+        double peak_error = 0;
+        for (int k = 0; k < 62000; ++k) {
+            CAPTURE(update_cycles);
+            CAPTURE(k);
+            const double t = (k / update_cycles) * update_cycles * .001;
+            const double u = std::min(t, 1.);
+            const double envelope = u * u * u * (10 + u * (-15 + 6 * u));
+            const double ideal =
+                k < 60000 ? .01 * std::sin(2 * std::acos(-1.) * t) * envelope
+                          : 0.;
+            const double noisy =
+                ideal + (k < 60000 ? (k % 2 ? 2e-6 : -2e-6) : 0.);
+            rocos::JntArray output;
+            const auto previous_a = processor.Acceleration();
+            const int before = model.ik_calls;
+            REQUIRE(processor.Step(rocos::Frame(rocos::Vector(noisy, 0, 0)),
+                                   false, output) == Result::NoError);
+            REQUIRE(model.ik_calls == before + 1);
+            REQUIRE(std::abs(processor.Acceleration()(0) - previous_a(0)) <=
+                    jerk * .001 + 1e-9);
+            if (k > 2000 && k < 59000)
+                peak_error = std::max(peak_error, std::abs(output(0) - ideal));
+        }
+        CAPTURE(update_cycles);
+        CAPTURE(peak_error);
+        CHECK(peak_error < .0024);
+        CHECK(std::abs(processor.Position()(0)) < 1e-9);
+        CHECK(processor.AtRest());
+    }
+}
+
+TEST_CASE("Servo rejected IK does not advance rate limiter state") {
+    FakeModel first, second;
+    rocos::ServoSignalProcessor a, b;
+    const std::vector<rocos::JointDerivativeLimits> limits(3, {10, 150, 10, 0});
+    REQUIRE(a.Reset(&first, limits, makeJntArray(0, 0, 0), .001, {}) ==
+            Result::NoError);
+    REQUIRE(b.Reset(&second, limits, makeJntArray(0, 0, 0), .001, {}) ==
+            Result::NoError);
+    rocos::JntArray qa, qb;
+    for (int k = 0; k < 100; ++k) {
+        first.forced_ik = makeJntArray(0, .1, 0);
+        REQUIRE(a.Step(rocos::Frame::Identity(), false, qa) == Result::IkTrack);
+        first.forced_ik = second.forced_ik = makeJntArray(k * 1e-6, 0, 0);
+        REQUIRE(a.Step(rocos::Frame::Identity(), false, qa) == Result::NoError);
+        REQUIRE(b.Step(rocos::Frame::Identity(), false, qb) == Result::NoError);
+        CHECK((qa.data - qb.data).norm() == 0);
+        CHECK((a.Velocity().data - b.Velocity().data).norm() == 0);
+        CHECK((a.Acceleration().data - b.Acceleration().data).norm() == 0);
+    }
+}
+
+TEST_CASE("Servo Cartesian rate limiter matches libfranka scalar recurrence") {
+    FakeModel model;
+    model.velocity.data.setConstant(3);
+    rocos::ServoSettings settings;
+    settings.lowpass_enabled = false;
+    for (double dt : {.0005, .001, .002}) {
+        for (int update_cycles : {1, 2, 5}) {
+            rocos::ServoSignalProcessor processor;
+            REQUIRE(processor.Reset(
+                &model, std::vector<rocos::JointDerivativeLimits>(3, {10, 10000, 10, 0}),
+                makeJntArray(0, 0, 0), dt, settings) == Result::NoError);
+            rocos::ServoJointState expected;
+            for (int k = 0; k < 4000; ++k) {
+                const double t = (k / update_cycles) * update_cycles * dt;
+                const double target = .01 * std::sin(2 * std::acos(-1.) * t) +
+                                      (k % 2 ? 2e-6 : -2e-6);
+                const double requested_velocity = (target - expected.position) / dt;
+                const double requested_jerk =
+                    ((requested_velocity - expected.velocity) / dt - expected.acceleration) / dt;
+                const double jerk_limited_acceleration = expected.acceleration +
+                    std::clamp(requested_jerk, -10000., 10000.) * dt;
+                const double minimum = std::max(-10., 1000 * (-3 - expected.velocity));
+                const double maximum = std::min(10., 1000 * (3 - expected.velocity));
+                expected.acceleration = std::clamp(jerk_limited_acceleration, minimum, maximum);
+                expected.velocity += expected.acceleration * dt;
+                expected.position += expected.velocity * dt;
+                rocos::JntArray output;
+                REQUIRE(processor.Step(rocos::Frame(rocos::Vector(target, 0, 0)),
+                                       false, output) == Result::NoError);
+                CHECK(std::abs(output(0) - expected.position) < 1e-11);
+                CHECK(std::abs(processor.Velocity()(0) - expected.velocity) < 1e-8);
+                CHECK(std::abs(processor.Acceleration()(0) - expected.acceleration) < 1e-5);
+            }
+        }
+    }
+}
+
+TEST_CASE("Servo Cartesian Talon rate limiter settles repeated fixed small targets") {
+    FakeModel model;
+    model.velocity.data.setConstant(3);
+    rocos::ServoSettings settings;
+    settings.lowpass_enabled = false;
+    for (double target : {2e-6, 2e-5, 1e-4, 1e-3}) {
+        rocos::ServoSignalProcessor processor;
+        REQUIRE(processor.Reset(
+            &model, std::vector<rocos::JointDerivativeLimits>(3, {10, 10000, 10, 0}),
+            makeJntArray(0, 0, 0), .001, settings) == Result::NoError);
+        rocos::JntArray output;
+        for (int k = 0; k < 2000; ++k) {
+            const double previous_acceleration = processor.Acceleration()(0);
+            REQUIRE(processor.Step(rocos::Frame(rocos::Vector(target, 0, 0)),
+                                   false, output) == Result::NoError);
+            REQUIRE(std::abs(processor.Acceleration()(0)) <= 10);
+            REQUIRE(std::abs(processor.Acceleration()(0) - previous_acceleration) <= 10 + 1e-9);
+        }
+        CHECK(std::abs(output(0) - target) < 1e-9);
+        CHECK(processor.AtRest());
+    }
 }

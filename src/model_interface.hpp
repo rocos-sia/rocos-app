@@ -93,6 +93,11 @@ class ModelInterface {
   Result LimitServoPositionStep(unsigned int axis, double target,
                                const ServoJointState& previous, const JointDerivativeLimits& limits,
                                double dt, ServoJointState& next) const;
+  // reference_next 必须由 reference 按同一离散积分生成；约束投影后仍需验证制动。
+  Result LimitServoReferenceStep(unsigned int axis, const ServoJointState& reference,
+                                const ServoJointState& reference_next,
+                                const ServoJointState& previous, const JointDerivativeLimits& limits,
+                                double dt, ServoJointState& next) const;
   Result MakeServoBrake(unsigned int axis, const ServoJointState& state,
                         const JointDerivativeLimits& limits, double dt, ServoBrake& brake) const;
 

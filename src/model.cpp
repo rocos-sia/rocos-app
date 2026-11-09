@@ -3,6 +3,7 @@
 #include <pinocchio/fwd.hpp>
 // clang-format on
 #include "model.hpp"
+#include "servo_trace.hpp"
 
 #include <tinyxml2.h>
 #include <urdf_parser/urdf_parser.h>
@@ -410,9 +411,39 @@ Result Model::InverseKinematics(const JntArray& seed, const Frame& target,
   std::lock_guard<std::mutex> lock(impl_->ik_mutex);
   Eigen::VectorXd solution;
   const pinocchio::SE3 pose(target.M.data, target.p.data);
-  const bool solved =
-      impl_->coupled ? impl_->solveCoupled(seed, pose, q_min_, q_max_, solution)
-                     : impl_->ik->CartToJnt(seed.data, pose, solution) > 0;
+  auto* trace = CurrentServoIkTrace();
+  const auto begin = trace ? ServoTraceNow() : 0;
+  const int backend_result = impl_->coupled
+      ? (impl_->solveCoupled(seed, pose, q_min_, q_max_, solution) ? 1 : -3)
+      : impl_->ik->CartToJnt(seed.data, pose, solution);
+  const bool solved = backend_result > 0;
+  if (trace) {
+    trace->solve_ns = ServoTraceNow() - begin;
+    trace->backend_result = backend_result;
+    const auto capture_begin = ServoTraceNow();
+    for (size_t i = 0; i < std::min<size_t>(seed.rows(), kServoTraceJoints); ++i) {
+      trace->seed[i] = seed(i);
+      if (i < static_cast<size_t>(solution.size())) trace->output[i] = solution(i);
+    }
+    for (int r = 0; r < 4; ++r)
+      for (int c = 0; c < 4; ++c)
+        trace->target[r * 4 + c] = r == 3 ? (c == 3 ? 1 : 0)
+            : (c == 3 ? target.p(r) : target.M(r, c));
+    if (!impl_->coupled) {
+      // 只在诊断时复制公开候选集；不更改选解，复制耗时另行记录。
+      thread_local std::vector<Eigen::VectorXd> candidates;
+      thread_local std::vector<std::pair<double, unsigned int>> scores;
+      impl_->ik->getSolutions(candidates, scores);
+      trace->count = static_cast<int32_t>(candidates.size());
+      if (solved && !scores.empty()) trace->selected = scores.front().second;
+      for (size_t c = 0; c < std::min<size_t>(candidates.size(), 2); ++c)
+        for (size_t i = 0; i < std::min<size_t>(candidates[c].size(), kServoTraceJoints); ++i)
+          trace->candidates[c][i] = candidates[c](i);
+      for (const auto& score : scores)
+        if (score.second < 2) trace->scores[score.second] = score.first;
+    }
+    trace->capture_ns = ServoTraceNow() - capture_begin;
+  }
   if (!solved || solution.size() != GetJointNum() || !solution.allFinite())
     return failure(Result::IkCalcFail);
   for (int i = 0; i < solution.size(); ++i)

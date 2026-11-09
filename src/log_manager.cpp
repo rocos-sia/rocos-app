@@ -2,6 +2,7 @@
 #include "result.hpp"
 #include "spdlog/fmt/fmt.h"
 #include <charconv>
+#include <cmath>
 #include <ctime>
 #include <iomanip>
 #include <sstream>
@@ -26,6 +27,20 @@ const char* moduleName(LogModule module) {
 std::string eventMessage(const RtLogEvent& event) {
     const auto result = to_string(static_cast<Result>(event.code));
     switch (event.type) {
+        case LogEventType::ServoIkDiscontinuity:
+            return fmt::format("servo_ik_discontinuity: joint {}, candidate={:.9f}, previous_accepted_ik={:.9f}, abs_delta={:.9f}, limit={:.9f} (joint units); candidate rejected.", event.joint + 1, event.value, event.lower, std::abs(event.value-event.lower), event.upper);
+        case LogEventType::ServoReferenceDeviation:
+            return fmt::format("servo_reference_deviation: joint {}, candidate={:.9f}, limited_reference={:.9f}, abs_delta={:.9f}, limit={:.9f} (joint units); candidate rejected.", event.joint + 1, event.value, event.lower, std::abs(event.value-event.lower), event.upper);
+        case LogEventType::ServoReferenceInfeasible:
+            return fmt::format("servo_reference_infeasible: joint {}, reference_velocity={:.9f}, reference_acceleration={:.9f}, target={:.9f}; next limited state/braking check failed: {} ({}); candidate rejected.", event.joint + 1, event.value, event.lower, event.upper, result, event.code);
+        case LogEventType::ServoFeedbackPosition:
+            return fmt::format("servo_feedback_position_error: joint {}, actual={:.9f}, limited_reference={:.9f}, abs_error={:.9f}, limit={:.9f} (joint units).", event.joint + 1, event.value, event.lower, std::abs(event.value-event.lower), event.upper);
+        case LogEventType::ServoFeedbackVelocity:
+            return fmt::format("servo_feedback_velocity_error: joint {}, actual_velocity={:.9f}, reference_velocity={:.9f}, abs_error={:.9f}, limit={:.9f} (joint units/s).", event.joint + 1, event.value, event.lower, std::abs(event.value-event.lower), event.upper);
+        case LogEventType::ServoFeedbackInvalid:
+            return fmt::format("servo_feedback_invalid: actual position/velocity range, sample validity or freshness check failed: {} ({}); motion aborted.", result, event.code);
+        case LogEventType::ServoGuardStop:
+            return fmt::format("servo_guard_stop: {} ({}); controlled stop latched; rejected command will not be applied; fault retained after stopping.", result, event.code);
         case LogEventType::ServoCommunicationFault:
             return fmt::format("Servo communication fault: success_rate={}, missing_cycles={}, minimum_rate={}; controlled stop latched.", event.value, event.lower, event.upper);
         case LogEventType::ServoStartPoseInvalid:

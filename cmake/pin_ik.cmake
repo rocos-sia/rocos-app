@@ -7,7 +7,8 @@ add_library(pin_ik STATIC
     ${ROCOS_PIN_IK_SOURCE_DIR}/src/pinocchio_tl.cpp
     ${ROCOS_PIN_IK_SOURCE_DIR}/src/nlopt_ik.cpp
     ${ROCOS_PIN_IK_SOURCE_DIR}/src/pin_ik.cpp
-    ${ROCOS_PIN_IK_SOURCE_DIR}/src/urdf.cpp)
+    ${ROCOS_PIN_IK_SOURCE_DIR}/src/urdf.cpp
+    ${ROCOS_PIN_IK_SOURCE_DIR}/src/worker_thread.cpp)
 set_target_properties(pin_ik PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_compile_features(pin_ik PUBLIC cxx_std_17)
 target_include_directories(pin_ik PUBLIC ${ROCOS_PIN_IK_SOURCE_DIR}/include)

@@ -28,7 +28,7 @@ find_package(LibArchive REQUIRED)
 find_package(OpenSSL REQUIRED)
 
 # CMake VERSION 仅接受数字；完整 SemVer 版本单独拼接。
-set(ROCOS_APP_VERSION_PRERELEASE "rc.6")
+set(ROCOS_APP_VERSION_PRERELEASE "rc.7")
 set(ROCOS_APP_VERSION_FULL "${PROJECT_VERSION}")
 if(NOT ROCOS_APP_VERSION_PRERELEASE STREQUAL "")
     string(APPEND ROCOS_APP_VERSION_FULL "-${ROCOS_APP_VERSION_PRERELEASE}")
@@ -168,6 +168,7 @@ add_library(robot
         src/model.cpp
         src/model_limits.cpp
         src/servo_signal_processor.cpp
+        src/servo_trace.cpp
 
         src/motion_preview_http.cpp
         src/motion_preview.cpp
@@ -533,6 +534,12 @@ target_compile_definitions(servo_robot_test PRIVATE
 add_test(NAME servo_robot_test COMMAND servo_robot_test)
 set_tests_properties(servo_robot_test PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} TIMEOUT 30)
+
+add_executable(servo_trace_test test/servo_trace_test.cc)
+target_link_libraries(servo_trace_test PRIVATE robot)
+target_compile_definitions(servo_trace_test PRIVATE
+        TRACE_TEST_MODEL="${CMAKE_CURRENT_SOURCE_DIR}/config/robots/talon/robot.urdf")
+add_test(NAME servo_trace_test COMMAND servo_trace_test)
 
 add_executable(move_line_test test/move_line_test.cc)
 target_link_libraries(move_line_test

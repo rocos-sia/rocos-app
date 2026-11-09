@@ -16,7 +16,7 @@ hardware:
       upper: 2.84
       vel: 3.0
       acc: 10.0
-      jerk: 150.0
+      jerk: 10000.0
       effort: 30.0
     transform:
       ratio: 1.0
@@ -50,7 +50,7 @@ hardware:
       upper: 2.22
       vel: 3.0
       acc: 10.0
-      jerk: 150.0
+      jerk: 10000.0
       effort: 30.0
     transform:
       ratio: 1.0
@@ -84,7 +84,7 @@ hardware:
       upper: 2.84
       vel: 3.0
       acc: 10.0
-      jerk: 150.0
+      jerk: 10000.0
       effort: 30.0
     transform:
       ratio: 1.0
@@ -118,7 +118,7 @@ hardware:
       upper: 2.23
       vel: 3.0
       acc: 10.0
-      jerk: 150.0
+      jerk: 10000.0
       effort: 30.0
     transform:
       ratio: 1.0
@@ -152,7 +152,7 @@ hardware:
       upper: 2.71
       vel: 3.0
       acc: 10.0
-      jerk: 150.0
+      jerk: 10000.0
       effort: 30.0
     transform:
       ratio: 1.0
@@ -186,7 +186,7 @@ hardware:
       upper: 2.11
       vel: 3.0
       acc: 10.0
-      jerk: 150.0
+      jerk: 10000.0
       effort: 30.0
     transform:
       ratio: 1.0
@@ -220,7 +220,7 @@ hardware:
       upper: 3.14
       vel: 3.0
       acc: 10.0
-      jerk: 150.0
+      jerk: 10000.0
       effort: 30.0
     transform:
       ratio: 1.0
