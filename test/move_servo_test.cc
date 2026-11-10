@@ -1222,3 +1222,27 @@ TEST_CASE("Servo Cartesian Talon rate limiter settles repeated fixed small targe
         CHECK(processor.AtRest());
     }
 }
+
+TEST_CASE("Franka position limiting follows feasible periodic targets without tracking lag") {
+    FakeModel model;
+    model.velocity.data.setConstant(3);
+    const rocos::JointDerivativeLimits limits{10, 10000, 10, 0};
+    for (double dt : {.0005, .001, .002}) {
+        rocos::ServoJointState state{};
+        double peak_error = 0;
+        for (int k = 0; k < int(10 / dt); ++k) {
+            const double wave = (1 - std::cos(std::acos(-1.) * k * dt)) / 2;
+            const double target = .05 * wave * wave;
+            rocos::ServoJointState next;
+            REQUIRE(model.LimitServoPositionStep(0, target, state, limits, dt, next) == Result::NoError);
+            CHECK(std::abs(next.velocity) <= 3);
+            CHECK(std::abs(next.acceleration) <= 10);
+            CHECK(std::abs(next.acceleration - state.acceleration) <= 10000 * dt + 1e-8);
+            rocos::ServoBrake brake;
+            REQUIRE(model.MakeServoBrake(0, next, limits, dt, brake) == Result::NoError);
+            peak_error = std::max(peak_error, std::abs(next.position - target));
+            state = next;
+        }
+        CHECK(peak_error < 1e-12);
+    }
+}

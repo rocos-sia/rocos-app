@@ -10,6 +10,7 @@
 #include <cerrno>
 #include <ctime>
 #include <cmath>
+#include <limits>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -343,14 +344,32 @@ HardwareConfig Hardware::LoadConfigFromYAML(const std::string& yaml_file_path) {
 
 double Hardware::cntToUnit(const Drive& drive, int32_t raw_cnt) const {
     // 物理值 = (原始值 - 偏移) / cnt_per_unit / ratio
-    double raw = static_cast<double>(raw_cnt - drive.transform.offset_pos_cnt);
+    double raw = static_cast<double>(raw_cnt) - drive.transform.offset_pos_cnt;
     return raw / drive.transform.cnt_per_unit / drive.transform.ratio;
 }
 
 int32_t Hardware::unitToCnt(const Drive& drive, double unit_val) const {
-    // 原始值 = 物理值 * cnt_per_unit * ratio + 偏移
-    double raw = unit_val * drive.transform.cnt_per_unit * drive.transform.ratio;
-    return static_cast<int32_t>(raw) + drive.transform.offset_pos_cnt;
+    const double scale = drive.transform.cnt_per_unit * drive.transform.ratio;
+    const double offset = drive.transform.offset_pos_cnt;
+    const auto& limit = drive.limit;
+    if (!std::isfinite(unit_val) || !std::isfinite(scale) || scale == 0 ||
+        std::isnan(limit.lower) || std::isnan(limit.upper) ||
+        limit.lower > limit.upper || unit_val < limit.lower || unit_val > limit.upper)
+        throw std::out_of_range("Invalid hardware position or encoder transform");
+    // 最近整数取整，避免浮点尾差被向零截断为整计数偏差。
+    const double count = std::round(unit_val * scale) + offset;
+    if (!std::isfinite(count) || count < std::numeric_limits<int32_t>::min() ||
+        count > std::numeric_limits<int32_t>::max())
+        throw std::out_of_range("Position exceeds encoder count range");
+    const double first = limit.lower * scale + offset;
+    const double last = limit.upper * scale + offset;
+    const double lower = std::max(std::ceil(std::min(first, last)),
+                                  double(std::numeric_limits<int32_t>::min()));
+    const double upper = std::min(std::floor(std::max(first, last)),
+                                  double(std::numeric_limits<int32_t>::max()));
+    if (lower > upper)
+        throw std::out_of_range("No encoder count inside joint position limits");
+    return static_cast<int32_t>(std::clamp(count, lower, upper));
 }
 
 double Hardware::torqueToUnit(const Drive& drive, int16_t raw_torque) const {
@@ -397,10 +416,18 @@ JntArray Hardware::GetLoadTorque() {
 void Hardware::SetPosition(const JntArray& q) {
     if (safety_stop_.load()) return;
     std::lock_guard<std::mutex> lock(output_mutex_);
-    output_snapshot_.position=q;
+    // 全轴及联动目标预检完成后再发布 PDO，拒绝时保留上一完整输出。
+    for (size_t i = 0; i < ModelJointCount() && i < q.rows(); ++i) {
+        const auto id = DriveIdByModelIndex(i);
+        unitToCnt(*findDriveById(id), q(i));
+        for (const auto& mimic : mimic_drives_)
+            if (mimic.source_id == id)
+                unitToCnt(*findDriveById(mimic.id), mimic.multiplier * q(i) + mimic.offset);
+    }
     for (size_t i = 0; i < ModelJointCount() && i < q.rows(); ++i) {
         SetJointPosition(DriveIdByModelIndex(i), q(i));
     }
+    output_snapshot_.position=q;
 }
 
 void Hardware::SetVelocity(const JntArray& q_dot) {
@@ -502,6 +529,12 @@ double Hardware::GetJointLoadTorque(int32_t id) {
 void Hardware::SetJointPosition(int32_t id, double pos) {
     for (const auto& mimic : mimic_drives_)
         if (mimic.id == id) return;
+    const auto* drive = findDriveById(id);
+    if (!drive) return;
+    unitToCnt(*drive, pos);
+    for (const auto& mimic : mimic_drives_)
+        if (mimic.source_id == id)
+            unitToCnt(*findDriveById(mimic.id), mimic.multiplier * pos + mimic.offset);
     writeJointPosition(id, pos);
     for (const auto& mimic : mimic_drives_)
         if (mimic.source_id == id)

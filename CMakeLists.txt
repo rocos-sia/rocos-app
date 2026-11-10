@@ -28,7 +28,7 @@ find_package(LibArchive REQUIRED)
 find_package(OpenSSL REQUIRED)
 
 # CMake VERSION 仅接受数字；完整 SemVer 版本单独拼接。
-set(ROCOS_APP_VERSION_PRERELEASE "rc.7")
+set(ROCOS_APP_VERSION_PRERELEASE "rc.8")
 set(ROCOS_APP_VERSION_FULL "${PROJECT_VERSION}")
 if(NOT ROCOS_APP_VERSION_PRERELEASE STREQUAL "")
     string(APPEND ROCOS_APP_VERSION_FULL "-${ROCOS_APP_VERSION_PRERELEASE}")
@@ -328,6 +328,7 @@ configure_file(include/ver.h.in ver.h) # Version Definition
 #############
 
 enable_testing()
+add_subdirectory(librocos)
 add_executable(identified_hardware_test test/identified_hardware_test.cc)
 target_link_libraries(identified_hardware_test PRIVATE identified_joint_impedance)
 target_compile_definitions(identified_hardware_test PRIVATE
@@ -528,10 +529,13 @@ set_tests_properties(move_servo_test PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
 add_executable(servo_robot_test test/servo_robot_test.cc)
-target_link_libraries(servo_robot_test PRIVATE robot)
+target_link_libraries(servo_robot_test PRIVATE robot librocos)
 target_compile_definitions(servo_robot_test PRIVATE
         SERVO_TEST_DATA="${CMAKE_SOURCE_DIR}/test/data/dynamics_id")
-add_test(NAME servo_robot_test COMMAND servo_robot_test)
+add_test(NAME servo_robot_test COMMAND servo_robot_test --test-case-exclude=librocos*)
+add_test(NAME librocos_robot_test COMMAND servo_robot_test --test-case=librocos*)
+set_tests_properties(librocos_robot_test PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} TIMEOUT 60 RUN_SERIAL TRUE)
 set_tests_properties(servo_robot_test PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} TIMEOUT 30)
 

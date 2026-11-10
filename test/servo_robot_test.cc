@@ -1,6 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 
 #include <sockpp/udp_socket.h>
+#include <librocos/robot.h>
 #include <unistd.h>
 
 #include <chrono>
@@ -44,6 +45,7 @@ struct OfflineMaster {
     const int id{nextId()};
     rocos::SharedMemoryConfig master{id};
     std::atomic<bool> running{true};
+    std::atomic<bool> follow_targets{false};
     std::thread thread;
     OfflineMaster() {
         REQUIRE(master.createSharedMemory());
@@ -80,6 +82,12 @@ struct OfflineMaster {
                     if ((control & 0x8f) == 0x07) status = 0x23;
                     if ((control & 0x8f) == 0x0f) status = 0x27;
                     master.setSlaveInputVarValue<uint16_t>(i, 0, status);
+                    if (follow_targets && status == 0x27) {
+                        const auto previous = master.getSlaveInputVarValue<int32_t>(i, 1);
+                        const auto target = master.getSlaveOutputVarValue<int32_t>(i, 2);
+                        master.setSlaveInputVarValue<int32_t>(i, 1, target);
+                        master.setSlaveInputVarValue<int32_t>(i, 2, (target - previous) * 1000);
+                    }
                 }
                 busTimestamp();
                 master.notifyClients();
@@ -151,6 +159,118 @@ struct Fixture {
     }
 };
 }  // namespace
+
+TEST_CASE("Hardware position counts round without bias and reject partial batches") {
+    OfflineMaster offline;
+    auto config = rocos::Hardware::LoadConfigFromYAML(offline.config().hardware_config);
+    for (auto& drive : config.drives) {
+        drive.transform.cnt_per_unit = 156455.678;
+        drive.transform.ratio = drive.id ? -0.5 : 1.0;
+        drive.transform.offset_pos_cnt = 123;
+    }
+    rocos::Hardware hardware(config, offline.id);
+    for (const auto& drive : config.drives) {
+        const double scale = drive.transform.cnt_per_unit * drive.transform.ratio;
+        for (int count : {-100000, -1, 0, 1, 100000}) {
+            for (double direction : {-INFINITY, INFINITY}) {
+                hardware.SetJointPosition(drive.id, std::nextafter(count / scale, direction));
+                CHECK(offline.master.getSlaveOutputVarValue<int32_t>(drive.id, 2) == count + 123);
+            }
+        }
+        CHECK_THROWS_AS(hardware.SetJointPosition(drive.id, INFINITY), std::out_of_range);
+        CHECK_THROWS_AS(hardware.SetJointPosition(drive.id, drive.limit.upper + 1), std::out_of_range);
+    }
+    const auto before0 = offline.master.getSlaveOutputVarValue<int32_t>(0, 2);
+    const auto before1 = offline.master.getSlaveOutputVarValue<int32_t>(1, 2);
+    rocos::JntArray invalid(2);
+    invalid(0) = .1; invalid(1) = INFINITY;
+    CHECK_THROWS_AS(hardware.SetPosition(invalid), std::out_of_range);
+    CHECK(offline.master.getSlaveOutputVarValue<int32_t>(0, 2) == before0);
+    CHECK(offline.master.getSlaveOutputVarValue<int32_t>(1, 2) == before1);
+}
+
+TEST_CASE("librocos actual HTTP and UDP joint servo with offline master") {
+    OfflineMaster offline;
+    auto config = offline.config();
+    config.hardware = rocos::Hardware::LoadConfigFromYAML(config.hardware_config);
+    for (auto& drive : config.hardware->drives) drive.limit.jerk = 10000;
+    rocos::Robot controller(config);
+    rocos::RobotHttpServer server(&controller);
+    librocos::Options options;
+    options.http_port = rocos::RobotHttpServerTestAccess::start(server);
+    sockpp::udp_socket reservation;
+    REQUIRE(reservation.bind(sockpp::inet_address("127.0.0.1", 0)));
+    options.udp_port = sockpp::inet_address(reservation.address()).port();
+    reservation.close();
+    REQUIRE(controller.SetEnabled() == Result::NoError);
+    offline.follow_targets = true;
+    REQUIRE(controller.hardware->GetJointDerivativeLimits()[0].jerk == 10000);
+    librocos::Robot client("127.0.0.1", options);
+    REQUIRE(client.readOnce().dof == 2);
+    client.enableRci();
+    double largest_tracking_error = 0;
+    double largest_actual_position = 0;
+    double minimum_reception = 1;
+    std::size_t samples = 0;
+    for (int motion = 0; motion < 3; ++motion) {
+        librocos::JointArray initial{};
+        double elapsed = 0;
+        client.control([&](const librocos::RobotState& state, librocos::Duration period) {
+            if (period.toNSec() == 0) initial = state.q_d;
+            elapsed += period.toSec();
+            ++samples;
+            largest_tracking_error = std::max(largest_tracking_error, std::abs(state.q[0] - state.q_d[0]));
+            largest_actual_position = std::max(largest_actual_position, std::abs(state.q[0]));
+            if (state.applied_message_id > 100)
+                minimum_reception = std::min(minimum_reception, state.control_command_success_rate);
+            const double phase = 2 * std::acos(-1.0) * std::min(elapsed / 4.0, 1.0);
+            const double wave = (1 - std::cos(phase)) / 2;
+            librocos::JointPositions command(initial, state.dof);
+            command.q[0] += 0.001 * wave * wave;
+            if (elapsed >= 4.25) return librocos::MotionFinished(command);
+            return command;
+        });
+        const auto status = client.rciStatus();
+        REQUIRE(status.robot_state == "STOPPED");
+        REQUIRE_FALSE(status.control_active);
+        REQUIRE(status.last_control);
+        CHECK(status.last_control->fault_code == 0);
+    }
+    CHECK(samples > 1000);
+    CHECK(largest_actual_position > 0.0009);
+    CHECK(largest_tracking_error < 0.0001);
+    std::cout << "librocos offline master: samples=" << samples
+              << ", max |q-q_d|=" << largest_tracking_error
+              << ", min reception ratio=" << minimum_reception << '\n';
+    client.disableRci();
+    CHECK_FALSE(controller.IsRciEnabled());
+    server.stop();
+}
+
+TEST_CASE_FIXTURE(Fixture, "librocos actual controller reports invalid first point with retained fault") {
+    REQUIRE(post("/api/robot/rci/enable", Json::object())["success"] == true);
+    librocos::Options options;
+    // client 的端口由现有 httplib 对象公开查询。
+    options.http_port = client.port();
+    sockpp::udp_socket reservation;
+    REQUIRE(reservation.bind(sockpp::inet_address("127.0.0.1", 0)));
+    options.udp_port = sockpp::inet_address(reservation.address()).port();
+    reservation.close();
+    librocos::Robot sdk("127.0.0.1", options);
+    try {
+        sdk.control([](const auto& state, auto) {
+            librocos::JointPositions target(state.q_d, state.dof);
+            target.q[0] += 0.5;
+            return target;
+        });
+        FAIL("Expected invalid first point");
+    } catch (const librocos::ControlException& error) {
+        CHECK(error.code() == static_cast<int>(Result::HomePositionError));
+        REQUIRE(error.status);
+        CHECK(error.status->robot_state == "ERROR_STATE");
+    }
+    CHECK(offline.master.getSlaveOutputVarValue<int32_t>(0, 2) == 1000);
+}
 
 TEST_CASE_FIXTURE(Fixture,
                   "Servo HTTP propagates occupied UDP port failure instead of "

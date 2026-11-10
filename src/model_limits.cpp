@@ -203,21 +203,8 @@ Result ModelInterface::LimitServoPositionStep(
     if (axis >= static_cast<unsigned int>(GetJointNum()) ||
         GetVelocityLimit().rows() != GetJointNum())
         return Result::UnmatchedJointsNumber;
-    // 按误差和运动状态分配导数预算，不再用 J/A 固定所有轨迹的带宽。
-    // 三个反馈项各占至多 J/3；加速度和速度仍由后续安全投影约束。
-    // 小误差时提高响应速度；速度/加速度较大时提前降低增益，避免饱和后振荡。
-    const double error = target - s.position;
-    double w = 0.1 / dt;
-    if (std::abs(error) > 0) {
-        w = std::min(w, std::cbrt(l.jerk / (3 * std::abs(error))));
-    }
-    if (std::abs(s.velocity) > 0)
-        w = std::min(w, std::sqrt(l.jerk / (9 * std::abs(s.velocity))));
-    if (std::abs(s.acceleration) > 0)
-        w = std::min(w, l.jerk / (9 * std::abs(s.acceleration)));
-    const double jerk = w*w*w*error -
-                        3*w*w*s.velocity - 3*w*s.acceleration;
-    const double desired_velocity = s.velocity + dt*(s.acceleration + dt*jerk);
+    // libfranka 位置限速：可行目标本周期到达，导数由统一限制器约束。
+    const double desired_velocity = (target - s.position) / dt;
     return LimitServoJointStep(axis, desired_velocity, s, l, dt, next);
 }
 

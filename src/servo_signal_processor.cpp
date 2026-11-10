@@ -149,7 +149,7 @@ Result ServoSignalProcessor::stepImpl(const Reference& target, bool stopping,
             rc = ValidateJointCommand(*s.model, goal, nullptr, s.dt);
             if (rc != Result::NoError) return rc;
             for (unsigned int i = 0; i < goal.rows(); ++i)
-                goal(i) = s.filtered(i) + s.alpha * (goal(i) - s.filtered(i));
+                goal(i) = s.q(i) + s.alpha * (goal(i) - s.q(i));
         } else {
             const auto* pose = std::get_if<Frame>(&target);
             if (!pose) return Result::IllegalParameter;
@@ -215,18 +215,9 @@ Result ServoSignalProcessor::stepImpl(const Reference& target, bool stopping,
         bool accepted = false;
         if (!stopping) {
             if (s.settings.rate_limit_enabled) {
-                if (cartesian) {
-                    // libfranka 位置限速：从上一已接受参考出发计算速度，
-                    // 由 Model 约束加速度/jerk 后积分，避免对 IK 历史做前馈。
-                    const double desired_velocity = (goal(i) - s.q(i)) / s.dt;
-                    rc = s.model->LimitServoJointStep(i, desired_velocity,
+                rc = s.model->LimitServoPositionStep(i, goal(i),
                                                      {s.q(i), s.v(i), s.a(i)},
                                                      s.limits[i], s.dt, candidate);
-                } else {
-                    rc = s.model->LimitServoPositionStep(i, goal(i),
-                                                         {s.q(i), s.v(i), s.a(i)},
-                                                         s.limits[i], s.dt, candidate);
-                }
             } else {
                 candidate = {goal(i), (goal(i) - s.q(i)) / s.dt, 0};
                 candidate.acceleration = (candidate.velocity - s.v(i)) / s.dt;
