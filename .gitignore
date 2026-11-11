@@ -59,7 +59,8 @@ qtcreator-*
 .#*
 
 # Vscode
-.vscode/
+.vscode/*
+!.vscode/settings.json
 
 # Catkin custom files
 CATKIN_IGNORE
