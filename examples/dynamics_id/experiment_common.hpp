@@ -58,7 +58,7 @@ inline std::vector<Drive> orderedDrives(const HardwareConfig& hardware,
         const auto& t = d.transform;
         const auto& l = d.limit;
         require(t.user_unit_name == "rad", "Expected rad position units: " + name);
-        require(std::isfinite(t.cnt_per_unit) && t.cnt_per_unit != 0 && std::isfinite(t.ratio) &&
+        require(std::isfinite(t.pos_per_unit) && t.pos_per_unit != 0 && std::isfinite(t.ratio) &&
                     t.ratio != 0 && std::isfinite(t.torque_per_unit) && t.torque_per_unit != 0,
                 "Invalid hardware conversion: " + name);
         require(std::isfinite(l.lower) && std::isfinite(l.upper) && l.lower < l.upper &&
@@ -66,7 +66,7 @@ inline std::vector<Drive> orderedDrives(const HardwareConfig& hardware,
                     std::isfinite(l.jerk) && l.jerk > 0 && std::isfinite(l.effort) && l.effort > 0,
                 "Invalid hardware limits: " + name);
         for (double q : {l.lower, l.upper}) {
-            const double raw = q * t.cnt_per_unit * t.ratio + t.offset_pos_cnt;
+            const double raw = q * t.pos_per_unit * t.ratio + t.offset_pos_cnt;
             require(std::isfinite(raw) && raw >= std::numeric_limits<int32_t>::min() &&
                         raw <= std::numeric_limits<int32_t>::max(),
                     "Position range exceeds int32 PDO: " + name);

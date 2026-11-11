@@ -89,7 +89,8 @@ class GetRobotInfo(Component):
     display_name: str = "获取机器人信息"
     description: str = (
         "获取 ROCOS 机器人的关节参数信息，包括各关节的传动比 (ratio)、"
-        "每单位编码器计数 (cnt_per_unit)、单位名称 (unit_name) 等配置参数。"
+        "位置码值/单位 (pos_per_unit)、速度码值/(单位/s) (vel_per_unit)、"
+        "驱动器与负载力矩码值/单位力矩 (torque_per_unit、load_torque_per_unit)、单位名称 (unit_name) 等配置参数。"
         "Use this when you need to know joint configuration details like ratios and encoder counts."
     )
     icon: str = "Info"
@@ -111,9 +112,15 @@ class GetRobotInfo(Component):
             r = _rocos_get(base, "/api/robot/info")
             if not r.get("success"): return f"查询失败: {r.get('message')}"
             infos = r.get("data", {}).get("joint_infos", [])
-            return "\n".join(f"[{j['id']}] {j['name']}: ratio={j['ratio']}, cnt/unit={j['cnt_per_unit']}, unit={j['unit_name']}" for j in infos)
+            return "\n".join(
+                f"[{j['id']}] {j['name']}: ratio={j['ratio']}, "
+                f"pos/unit={j['pos_per_unit']}, vel/unit={j['vel_per_unit']}, "
+                f"torque/unit={j['torque_per_unit']}, "
+                f"load_torque/unit={j['load_torque_per_unit']}, unit={j['unit_name']}"
+                for j in infos
+            )
         return Tool(
             name="GetRobotInfo",
-            description="查询机器人关节配置参数: 传动比ratio、编码器计数cnt_per_unit、单位名称",
+            description="查询机器人关节配置参数: 传动比ratio、独立位置/速度/驱动器力矩/负载力矩比例、单位名称",
             func=_run,
         )

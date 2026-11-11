@@ -87,8 +87,10 @@ struct Drive {
     struct Transform {
         double ratio = 1.0;            // 传动比（关节侧/电机侧）
         int offset_pos_cnt = 0;        // 编码器零点偏移 [cnt]
-        double cnt_per_unit = 1.0;     // 每物理单位对应编码器计数
-        double torque_per_unit = 1.0;  // 每物理单位对应力矩值
+        double pos_per_unit = 1.0;     // 位置码值/单位
+        double vel_per_unit = 1.0;     // 速度码值/(单位/s)，YAML 缺省时取 pos_per_unit
+        double torque_per_unit = 1.0;  // 驱动器力矩码值/单位力矩
+        double load_torque_per_unit = 1.0;   // 负载力矩码值/单位力矩
         std::string user_unit_name = "rad";  // 用户单位名称
     } transform;
 

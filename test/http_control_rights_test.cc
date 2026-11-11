@@ -72,10 +72,10 @@ TEST_CASE_FIXTURE(ControlFixture, "Robot info baseline is public and never renew
     const auto reply = Json::parse(response->body);
     CHECK(reply["success"] == true);
     const auto& data = reply["data"];
-    CHECK(data["info_schema_version"] == 1);
+    CHECK(data["info_schema_version"] == 2);
     CHECK(data["controller"]["app_version"] == ROCOS_APP_VERSION);
     CHECK(data["controller"]["shm_abi_version"] == rocos::SHM_ABI_VERSION);
-    CHECK(data["controller"]["capabilities"] == Json::array({"robot_info_v1"}));
+    CHECK(data["controller"]["capabilities"] == Json::array({"robot_info_v2"}));
     CHECK(data["robot"]["source"] == "placeholder");
     CHECK(data["robot"]["serial_number"].is_null());
     CHECK(data["master"]["source"] == "placeholder");
@@ -87,18 +87,21 @@ TEST_CASE_FIXTURE(ControlFixture, "Robot info baseline is public and never renew
     CHECK(Access::lastSeen(server) == before);
 }
 
-TEST_CASE("Robot info retains legacy joint values and marks configured slave identities unknown") {
+TEST_CASE("Robot info exposes independent joint transform values and marks configured slave identities unknown") {
     rocos::Robot::JointInfo joint;
     joint.id = 4;
     joint.name = "joint_2";
     joint.ratio = -100;
-    joint.cnt_per_unit = 123.5;
+    joint.pos_per_unit = 123.5;
+    joint.vel_per_unit = 456.0;
     joint.torque_per_unit = 0.2;
+    joint.load_torque_per_unit = -8.0;
     joint.zero_offset = -42;
     joint.unit_name = "rad";
     const auto info = rocos::robotInfoJson({joint});
     CHECK(info["joint_infos"][0] == Json{{"id", 4}, {"name", "joint_2"}, {"ratio", -100.0},
-        {"cnt_per_unit", 123.5}, {"torque_per_unit", 0.2}, {"zero_offset", -42}, {"unit_name", "rad"}});
+        {"pos_per_unit", 123.5}, {"vel_per_unit", 456.0},
+        {"torque_per_unit", 0.2}, {"load_torque_per_unit", -8.0}, {"zero_offset", -42}, {"unit_name", "rad"}});
     const auto& slave = info["slaves"][0];
     CHECK(slave["id"] == 4);
     CHECK(slave["joint_name"] == "joint_2");

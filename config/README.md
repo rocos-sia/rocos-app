@@ -1,6 +1,6 @@
 # ROCOS-App 配置
 
-实现依据：[已评审的配置文件规范](https://rocos-sia.feishu.cn/wiki/N1QKwpKtEicos3kpt55csqSrnrg)。本目录包含运行配置、Talon 模型资源和工具包；测试专用夹具仍位于 `test/`。本次不更改 EtherCAT 协议、控制算法或 HTTP API。
+实现依据：[已评审的配置文件规范](https://rocos-sia.feishu.cn/wiki/N1QKwpKtEicos3kpt55csqSrnrg)。本目录包含运行配置、Talon 模型资源和工具包；测试专用夹具仍位于 `test/`。驱动器单位变换和 HTTP 四字段迁移见下文。
 
 ## 目录与入口
 
@@ -44,6 +44,32 @@ cmake --build --preset release --parallel 2
 ```
 
 `--config` 本身相对启动工作目录；此后所有路径相对**声明该路径的 YAML 文件**。例如 `app.yaml` 的 `robot_config` 相对 `app.yaml`，`robot.yaml` 的 `hardware_config` 相对 `robot.yaml`；`user.yaml` 中替换的路径相对 `user.yaml`。绝对路径也可用。工具资源仍遵守现有工具包完整性约束：模型、mesh 必须在包内，不能用绝对资源路径或 `..` 绕过包校验。
+
+## 驱动器单位变换
+
+`hardware.yaml` 中每个 `type: driver` 的 `transform` 使用独立的码值比例：
+
+| 字段 | 含义 | 省略时 |
+| --- | --- | --- |
+| `pos_per_unit` | 位置码值/单位（rad 或 m） | `1.0` |
+| `vel_per_unit` | 速度码值/(单位/s) | 当前 `pos_per_unit` |
+| `torque_per_unit` | 驱动器力矩码值/单位力矩（N·m 或 N） | `1.0` |
+| `load_torque_per_unit` | 负载力矩码值/单位力矩（N·m 或 N） | `1.0` |
+
+读回公式为：位置 `(raw - offset_pos_cnt) / pos_per_unit / ratio`；速度
+`raw / vel_per_unit / ratio`；驱动器力矩 `raw / torque_per_unit`；负载力矩
+`raw / load_torque_per_unit`。位置、速度、驱动器力矩下发采用相应逆变换，位置继续按现有逻辑取整和校验限位。
+`ratio` 只参与位置和速度变换，`offset_pos_cnt` 只作用于位置。
+`torque_source: load_torque`（int16）和 `secondary_position`（int32）都使用
+`load_torque_per_unit`，后者虽借用位置 PDO，数据语义仍为负载力矩。负载力矩目前只有读取接口。
+比例必须有限且非零，允许负比例表示方向反转。直接构造 C++ `Drive` 时各比例初值为 `1.0`，应显式设置所需比例；速度继承位置比例由 YAML 解析完成。
+
+旧 YAML 字段 `cnt_per_unit` 已更名为 `pos_per_unit`，使用旧字段会拒绝加载。
+迁移时需按传感器实际单位设置负载力矩比例；它不再复用驱动器力矩比例或位置零点/传动比。
+HTTP `joint_infos` 同步返回 `pos_per_unit`、`vel_per_unit`、`torque_per_unit`、
+`load_torque_per_unit` 四个实际生效值，不再返回 `cnt_per_unit`。该破坏性变更将
+`info_schema_version` 升为 `2`，能力标识为 `robot_info_v2`；旧客户端需要更新字段读取。
+在线 Apifox ROCOS API 已同步四字段定义及含义；本地 OpenAPI 文件仅为该接口的同步快照。
 
 ## 覆盖及校验
 

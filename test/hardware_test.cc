@@ -5,6 +5,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <yaml-cpp/yaml.h>
 
 #include <test/doctest.h>
 
@@ -57,7 +58,7 @@ TEST_CASE("Hardware YAML - 纯驱动器配置 (6 轴)") {
         CHECK(d.torque_source == rocos::TorqueSource::LoadTorque);
         CHECK(d.limit.lower == doctest::Approx(-2.967));
         CHECK(d.limit.upper == doctest::Approx(2.967));
-        CHECK(d.transform.cnt_per_unit == doctest::Approx(200000.0));
+        CHECK(d.transform.pos_per_unit == doctest::Approx(200000.0));
         CHECK(d.transform.user_unit_name == "rad");
         CHECK(d.inputs.status_word == "Statusword");
         CHECK(d.inputs.load_torque_value == "Analog Input 1");
@@ -80,7 +81,7 @@ TEST_CASE("Hardware YAML - 纯驱动器配置 (6 轴)") {
         const auto& d = config.drives[5];
         CHECK(d.id == 6);
         CHECK(d.limit.effort == doctest::Approx(10.0));
-        CHECK(d.transform.cnt_per_unit == doctest::Approx(50000.0));
+        CHECK(d.transform.pos_per_unit == doctest::Approx(50000.0));
     }
 }
 
@@ -257,7 +258,10 @@ TEST_CASE("Hardware YAML - 缺失可选字段默认值") {
         CHECK(d.limit.lower == doctest::Approx(-2.71));
         CHECK(d.limit.upper == doctest::Approx(2.71));
         CHECK(d.transform.ratio == doctest::Approx(1.0));
-        CHECK(d.transform.cnt_per_unit == doctest::Approx(1.0));
+        CHECK(d.transform.pos_per_unit == doctest::Approx(1.0));
+        CHECK(d.transform.vel_per_unit == doctest::Approx(1.0));
+        CHECK(d.transform.torque_per_unit == doctest::Approx(1.0));
+        CHECK(d.transform.load_torque_per_unit == doctest::Approx(1.0));
         CHECK(d.transform.user_unit_name == "rad");
         // 未指定 PDO 变量名时为空串
         CHECK(d.inputs.status_word.empty());
@@ -489,4 +493,49 @@ hardware:
     CHECK(config.drives[0].limit.jerk == 20);
     CHECK(config.drives[0].limit.deceleration == doctest::Approx(1.5));
     CHECK(config.drives[0].limit.velocity_offset == doctest::Approx(.03));
+}
+
+TEST_CASE("Hardware YAML - 独立变换比例和默认值") {
+    auto transform = YAML::Load("{pos_per_unit: -100, ratio: 2, offset_pos_cnt: 37}");
+    double expected_velocity = -100.0;
+    double expected_torque = 1.0;
+    double expected_load = 1.0;
+    SUBCASE("速度默认继承位置比例，力矩默认独立为 1") {}
+    SUBCASE("显式配置独立比例") {
+        transform["vel_per_unit"] = 20.0;
+        transform["torque_per_unit"] = 4.0;
+        transform["load_torque_per_unit"] = -8.0;
+        expected_velocity = 20.0;
+        expected_torque = 4.0;
+        expected_load = -8.0;
+    }
+    auto yaml = YAML::Load("hardware: [{id: 0, type: driver}]");
+    yaml["hardware"][0]["transform"] = transform;
+    const auto config = rocos::Hardware::LoadConfigFromYAML(writeTmpYaml(YAML::Dump(yaml)));
+    REQUIRE(config.drives.size() == 1);
+    const auto& t = config.drives[0].transform;
+    CHECK(t.pos_per_unit == -100.0);
+    CHECK(t.vel_per_unit == expected_velocity);
+    CHECK(t.torque_per_unit == expected_torque);
+    CHECK(t.load_torque_per_unit == expected_load);
+}
+
+TEST_CASE("Hardware YAML - 拒绝旧字段和无效变换比例") {
+    auto yaml = YAML::Load("hardware: [{id: 0, type: driver}]");
+    SUBCASE("旧位置字段必须显式迁移") {
+        yaml["hardware"][0]["transform"]["cnt_per_unit"] = 100;
+        CHECK_THROWS_WITH(rocos::Hardware::LoadConfigFromYAML(writeTmpYaml(YAML::Dump(yaml))),
+                          "transform.cnt_per_unit was renamed to pos_per_unit");
+    }
+    SUBCASE("除数必须有限且非零") {
+        for (const auto* key :
+             {"ratio", "pos_per_unit", "vel_per_unit", "torque_per_unit", "load_torque_per_unit"}) {
+            for (const auto* value : {"0", ".nan", ".inf"}) {
+                INFO(key, " = ", value);
+                yaml["hardware"][0]["transform"] = YAML::Load(std::string("{") + key + ": " + value + "}");
+                CHECK_THROWS_AS(rocos::Hardware::LoadConfigFromYAML(writeTmpYaml(YAML::Dump(yaml))),
+                                std::invalid_argument);
+            }
+        }
+    }
 }

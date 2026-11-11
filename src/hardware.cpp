@@ -102,10 +102,18 @@ Drive Hardware::parseDrive(const YAML::Node& node) {
     // 解析 transform 子节点
     if (node["transform"]) {
         const auto& trans = node["transform"];
+        if (trans["cnt_per_unit"])
+            throw std::invalid_argument("transform.cnt_per_unit was renamed to pos_per_unit");
         d.transform.ratio          = yamlGetDouble(trans, "ratio", 1.0);
         d.transform.offset_pos_cnt = yamlGetInt(trans, "offset_pos_cnt", 0);
-        d.transform.cnt_per_unit   = yamlGetDouble(trans, "cnt_per_unit", 1.0);
+        d.transform.pos_per_unit = yamlGetDouble(trans, "pos_per_unit", 1.0);
+        d.transform.vel_per_unit = yamlGetDouble(trans, "vel_per_unit", d.transform.pos_per_unit);
+        d.transform.load_torque_per_unit = yamlGetDouble(trans, "load_torque_per_unit", 1.0);
         d.transform.torque_per_unit = yamlGetDouble(trans, "torque_per_unit", 1.0);
+        for (double scale : {d.transform.ratio, d.transform.pos_per_unit, d.transform.vel_per_unit,
+                             d.transform.torque_per_unit, d.transform.load_torque_per_unit})
+            if (!std::isfinite(scale) || scale == 0.0)
+                throw std::invalid_argument("Hardware transform scales must be finite and nonzero");
         d.transform.user_unit_name = yamlGetStr(trans, "user_unit_name", "rad");
     }
 
@@ -343,13 +351,13 @@ HardwareConfig Hardware::LoadConfigFromYAML(const std::string& yaml_file_path) {
 // ==========================================================================
 
 double Hardware::cntToUnit(const Drive& drive, int32_t raw_cnt) const {
-    // 物理值 = (原始值 - 偏移) / cnt_per_unit / ratio
+    // 物理值 = (原始值 - 偏移) / pos_per_unit / ratio
     double raw = static_cast<double>(raw_cnt) - drive.transform.offset_pos_cnt;
-    return raw / drive.transform.cnt_per_unit / drive.transform.ratio;
+    return raw / drive.transform.pos_per_unit / drive.transform.ratio;
 }
 
 int32_t Hardware::unitToCnt(const Drive& drive, double unit_val) const {
-    const double scale = drive.transform.cnt_per_unit * drive.transform.ratio;
+    const double scale = drive.transform.pos_per_unit * drive.transform.ratio;
     const double offset = drive.transform.offset_pos_cnt;
     const auto& limit = drive.limit;
     if (!std::isfinite(unit_val) || !std::isfinite(scale) || scale == 0 ||
@@ -498,8 +506,7 @@ double Hardware::GetJointVelocity(int32_t id) {
     if (!cache.velocity_actual_value) return 0.0;
     const auto& transform = config_.drives[static_cast<size_t>(idx)].transform;
     // 速度只做比例换算，不减去位置零点偏移。
-    return static_cast<double>(cache.velocity_actual_value.read()) / transform.cnt_per_unit /
-           transform.ratio;
+    return static_cast<double>(cache.velocity_actual_value.read()) / transform.vel_per_unit / transform.ratio;
 }
 
 double Hardware::GetJointTorque(int32_t id) {
@@ -519,10 +526,11 @@ double Hardware::GetJointLoadTorque(int32_t id) {
     // 根据 torque_source 选择读取通道，对调用者透明
     if (drive.torque_source == TorqueSource::SecondaryPosition) {
         if (!cache.secondary_position_value) return 0.0;
-        return cntToUnit(drive, cache.secondary_position_value.read());
+        return static_cast<double>(cache.secondary_position_value.read()) /
+               drive.transform.load_torque_per_unit;
     } else {
         if (!cache.load_torque_value) return 0.0;
-        return torqueToUnit(drive, cache.load_torque_value.read());
+        return static_cast<double>(cache.load_torque_value.read()) / drive.transform.load_torque_per_unit;
     }
 }
 
@@ -554,9 +562,9 @@ void Hardware::SetJointVelocity(int32_t id, double vel) {
     if (idx < 0) return;
     const auto& cache = drive_pdo_cache_[static_cast<size_t>(idx)];
     if (!cache.target_velocity) return;
-    // 速度值也使用 cnt_per_unit 变换（单位: unit/s → cnt/s）
-    double raw_val = vel * config_.drives[static_cast<size_t>(idx)].transform.cnt_per_unit
-                     * config_.drives[static_cast<size_t>(idx)].transform.ratio;
+    // 速度使用独立比例，不包含位置零点偏移。
+    double raw_val = vel * config_.drives[static_cast<size_t>(idx)].transform.vel_per_unit *
+                     config_.drives[static_cast<size_t>(idx)].transform.ratio;
     cache.target_velocity.write(static_cast<int32_t>(raw_val));
 }
 

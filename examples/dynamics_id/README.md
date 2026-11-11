@@ -51,9 +51,9 @@ cmake --build build --target dynamicsIdMain jointImpedanceVelocityMain -j2
 位置和速度使用不同的零点规则，当前速度修复为：
 
 ```text
-位置读取：(position_raw - offset_pos_cnt) / cnt_per_unit / ratio
-速度读取：velocity_raw / cnt_per_unit / ratio
-位置下发：q_rad * cnt_per_unit * ratio + offset_pos_cnt
+位置读取：(position_raw - offset_pos_cnt) / pos_per_unit / ratio
+速度读取：velocity_raw / vel_per_unit / ratio
+位置下发：q_rad * pos_per_unit * ratio + offset_pos_cnt
 ```
 
 `GetVelocity()` 批量调用 `GetJointVelocity()`，因此同样不减位置零点。

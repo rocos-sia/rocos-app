@@ -13,7 +13,7 @@ hardware:
     transform:
       ratio: 1.0
       offset_pos_cnt: 0
-      cnt_per_unit: 200000.0
+      pos_per_unit: 200000.0
       torque_per_unit: 1.0
       user_unit_name: rad
     inputs:
@@ -47,7 +47,7 @@ hardware:
     transform:
       ratio: 1.5
       offset_pos_cnt: 0
-      cnt_per_unit: 180000.0
+      pos_per_unit: 180000.0
       torque_per_unit: 1.0
       user_unit_name: rad
     inputs:
@@ -81,7 +81,7 @@ hardware:
     transform:
       ratio: 1.2
       offset_pos_cnt: 100
-      cnt_per_unit: 160000.0
+      pos_per_unit: 160000.0
       torque_per_unit: 0.8
       user_unit_name: rad
     inputs:
@@ -115,7 +115,7 @@ hardware:
     transform:
       ratio: 1.0
       offset_pos_cnt: 0
-      cnt_per_unit: 100000.0
+      pos_per_unit: 100000.0
       torque_per_unit: 0.5
       user_unit_name: rad
     inputs:
@@ -149,7 +149,7 @@ hardware:
     transform:
       ratio: 1.0
       offset_pos_cnt: 0
-      cnt_per_unit: 80000.0
+      pos_per_unit: 80000.0
       torque_per_unit: 0.3
       user_unit_name: rad
     inputs:
@@ -183,7 +183,7 @@ hardware:
     transform:
       ratio: 1.0
       offset_pos_cnt: 0
-      cnt_per_unit: 50000.0
+      pos_per_unit: 50000.0
       torque_per_unit: 0.2
       user_unit_name: rad
     inputs:

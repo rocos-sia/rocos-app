@@ -13,7 +13,7 @@ hardware:
     transform:
       ratio: 1.0
       offset_pos_cnt: 0
-      cnt_per_unit: 200000.0
+      pos_per_unit: 200000.0
       torque_per_unit: 1.0
       user_unit_name: rad
     inputs:
@@ -47,7 +47,7 @@ hardware:
     transform:
       ratio: 1.5
       offset_pos_cnt: 0
-      cnt_per_unit: 180000.0
+      pos_per_unit: 180000.0
       torque_per_unit: 1.0
       user_unit_name: rad
     inputs:

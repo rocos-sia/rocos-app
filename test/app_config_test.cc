@@ -504,3 +504,47 @@ TEST_CASE("Servo configuration rejects unknown, nonfinite and unsafe range setti
         CHECK_THROWS(rocos::LoadServoSettings(YAML::Load(yaml)));
     }
 }
+
+TEST_CASE_FIXTURE(ConfigFixture, "Hardware transform defaults survive normalization and export") {
+    const auto app = composed();
+    auto yaml = YAML::LoadFile((directory / "robots/talon/hardware.yaml").string());
+    auto transform = yaml["hardware"][0]["transform"];
+    transform["pos_per_unit"] = -123.0;
+    transform.remove("vel_per_unit");
+    transform.remove("torque_per_unit");
+    transform.remove("load_torque_per_unit");
+    double velocity = -123.0;
+    SUBCASE("Velocity inherits position") {}
+    SUBCASE("Explicit velocity is retained") {
+        transform["vel_per_unit"] = 42.0;
+        velocity = 42.0;
+    }
+    write(directory / "robots/talon/hardware.yaml", yaml);
+    const auto config = rocos::AppConfig::load(app.string());
+    const auto& t = config.robot.hardware->drives[0].transform;
+    CHECK(t.pos_per_unit == -123.0);
+    CHECK(t.vel_per_unit == velocity);
+    CHECK(t.torque_per_unit == 1.0);
+    CHECK(t.load_torque_per_unit == 1.0);
+    config.exportConfiguration((directory / "export").string());
+    const auto snapshot = YAML::LoadFile((directory / "export/effective.yaml").string());
+    const auto exported = snapshot["robot"]["hardware"][0]["transform"];
+    CHECK(exported["vel_per_unit"].as<double>() == velocity);
+    CHECK(exported["load_torque_per_unit"].as<double>() == 1.0);
+    CHECK_FALSE(exported["cnt_per_unit"].IsDefined());
+}
+
+TEST_CASE_FIXTURE(ConfigFixture, "Hardware transform rejects invalid scales in composed configuration") {
+    const auto app = composed();
+    auto yaml = YAML::LoadFile((directory / "robots/talon/hardware.yaml").string());
+    const auto original = YAML::Clone(yaml["hardware"][0]["transform"]);
+    for (const auto* key : {"vel_per_unit", "load_torque_per_unit"}) {
+        for (const auto* value : {"0", ".nan", ".inf"}) {
+            INFO(key, " = ", value);
+            yaml["hardware"][0]["transform"] = YAML::Clone(original);
+            yaml["hardware"][0]["transform"][key] = YAML::Load(value);
+            write(directory / "robots/talon/hardware.yaml", yaml);
+            CHECK_THROWS(rocos::AppConfig::load(app.string()));
+        }
+    }
+}

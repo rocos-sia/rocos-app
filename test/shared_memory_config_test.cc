@@ -2,6 +2,7 @@
 
 #include <sys/wait.h>
 #include <unistd.h>
+#include <yaml-cpp/yaml.h>
 
 #include <chrono>
 #include <cstring>
@@ -22,9 +23,10 @@ struct BusFixture {
     const int id = nextBusId();
     rocos::SharedMemoryConfig master{id};
 
-    explicit BusFixture(int drive_count = 1) {
+    explicit BusFixture(int drive_count = 1, int extra_bytes = 0) {
         REQUIRE(master.createSharedMemory());
-        REQUIRE(master.createPdDataMemoryProvider(8 * drive_count + 8, 8 * drive_count + 8));
+        REQUIRE(master.createPdDataMemoryProvider(8 * drive_count + 8 + extra_bytes,
+                                                  8 * drive_count + 8 + extra_bytes));
         auto& bus = *master.ecatBus;
         bus.slave_num = drive_count;
         bus.dt = 1000;
@@ -95,6 +97,9 @@ TEST_CASE_FIXTURE(BusFixture, "Real Hardware connects to a v2 master in another 
             drive.inputs.position_actual_value = "position";
             drive.outputs.control_word = "control";
             drive.outputs.target_position = "target";
+            // 此夹具直接用码值作为位置，覆盖测试中的 -789 指令。
+            drive.limit.lower = -1000;
+            drive.limit.upper = 1000;
             config.drives.push_back(drive);
             rocos::FTSensor sensor;
             sensor.id = 0;
@@ -164,7 +169,8 @@ TEST_CASE_FIXTURE(BusFixture, "Hardware velocity ignores the position offset") {
             drive.inputs.velocity_actual_value = "position";
             drive.outputs.control_word = "control";
             drive.transform.offset_pos_cnt = 100;
-            drive.transform.cnt_per_unit = 50.0;
+            drive.transform.pos_per_unit = 50.0;
+            drive.transform.vel_per_unit = 50.0;
             drive.transform.ratio = 2.0;
             config.drives.push_back(drive);
             bool ok = false;
@@ -289,7 +295,7 @@ TEST_CASE("Hardware mimic position commands follow source commands in user units
         drive.joint_name = "joint_" + std::to_string(id);
         drive.inputs.position_actual_value = "position";
         drive.outputs.target_position = "target";
-        drive.transform.cnt_per_unit = 1000;
+        drive.transform.pos_per_unit = 1000;
         config.drives.push_back(drive);
     }
     {
@@ -299,7 +305,7 @@ TEST_CASE("Hardware mimic position commands follow source commands in user units
                                        {"joint_1", "joint_0", 0, 0.25},
                                        {"display_only", "joint_0", 3, 0}});
         rocos::JntArray command(3);
-        command.data << 99, 88, 0.125;
+        command.data << 0.99, 0.88, 0.125;
         auto coupled = command;
         REQUIRE(hardware.ApplyPositionCoupling(coupled) == rocos::Result::NoError);
         CHECK(coupled(0) == doctest::Approx(0.25));
@@ -318,4 +324,82 @@ TEST_CASE("Hardware mimic position commands follow source commands in user units
         CHECK(bus.master.getSlaveOutputVarValue<int32_t>(2, 1) == 1000);
     }
     rocos::EcatConfig::getInstance(bus.id)->disconnect();
+}
+
+TEST_CASE("Hardware converts independent position velocity torque and load PDO scales") {
+    bool secondary = false;
+    SUBCASE("Load torque int16 channel") {}
+    SUBCASE("Secondary position int32 channel carries load torque") { secondary = true; }
+    BusFixture bus(1, 8);
+    auto& master = bus.master;
+    auto& slave = master.ecatBus->slaves[0];
+    slave.input_var_num = 5;
+    BusFixture::descriptor(slave.input_vars[2], "velocity", 7, 4);
+    BusFixture::descriptor(slave.input_vars[3], "torque", 11, 2);
+    BusFixture::descriptor(slave.input_vars[4], "load", 13, secondary ? 4 : 2);
+    slave.output_var_num = 4;
+    BusFixture::descriptor(slave.output_vars[2], "target velocity", 7, 4);
+    BusFixture::descriptor(slave.output_vars[3], "target torque", 11, 2);
+    master.setSlaveInputVarValue<uint16_t>(0, 0, 0x40);
+    master.setSlaveInputVarValue<int32_t>(0, 1, 300);
+    master.setSlaveInputVarValue<int32_t>(0, 2, -120);
+    master.setSlaveInputVarValue<int16_t>(0, 3, -20);
+    if (secondary)
+        master.setSlaveInputVarValue<int32_t>(0, 4, 80000);
+    else
+        master.setSlaveInputVarValue<int16_t>(0, 4, 80);
+    REQUIRE(master.publishReady());
+    REQUIRE(master.notifyClients());
+    const pid_t child = fork();
+    REQUIRE(child >= 0);
+    if (child == 0) {
+        try {
+            auto yaml = YAML::Load(R"(hardware:
+  - id: 0
+    type: driver
+    transform: {pos_per_unit: 50, vel_per_unit: -20, torque_per_unit: 4, load_torque_per_unit: 8, ratio: 2, offset_pos_cnt: 100}
+    inputs: {status_word: status, position_actual_value: position, velocity_actual_value: velocity, torque_actual_value: torque, load_torque_value: load}
+    outputs: {control_word: control, target_position: target, target_velocity: target velocity, target_torque: target torque}
+)");
+            auto config = rocos::Hardware::LoadConfigFromNode(yaml);
+            auto& drive = config.drives[0];
+            if (secondary) {
+                drive.torque_source = rocos::TorqueSource::SecondaryPosition;
+                drive.inputs.load_torque_value.clear();
+                drive.inputs.secondary_position_value = "load";
+            }
+            bool ok = false;
+            {
+                rocos::Hardware hardware(config, bus.id);
+                ok = hardware.GetPosition()(0) == 2.0 && hardware.GetJointPosition(0) == 2.0 &&
+                     hardware.GetVelocity()(0) == 3.0 && hardware.GetJointVelocity(0) == 3.0 &&
+                     hardware.GetTorque()(0) == -5.0 && hardware.GetJointTorque(0) == -5.0 &&
+                     hardware.GetLoadTorque()(0) == (secondary ? 10000.0 : 10.0) &&
+                     hardware.GetJointLoadTorque(0) == (secondary ? 10000.0 : 10.0);
+                rocos::JntArray value(1);
+                value(0) = -2.0;
+                hardware.SetPosition(value);
+                hardware.SetVelocity(value);
+                hardware.SetTorque(value);
+                ok = ok && master.getSlaveOutputVarValue<int32_t>(0, 1) == -100 &&
+                     master.getSlaveOutputVarValue<int32_t>(0, 2) == 80 &&
+                     master.getSlaveOutputVarValue<int16_t>(0, 3) == -8;
+                hardware.SetJointPosition(0, 1.0);
+                hardware.SetJointVelocity(0, 1.0);
+                hardware.SetJointTorque(0, 1.0);
+                ok = ok && master.getSlaveOutputVarValue<int32_t>(0, 1) == 200 &&
+                     master.getSlaveOutputVarValue<int32_t>(0, 2) == -40 &&
+                     master.getSlaveOutputVarValue<int16_t>(0, 3) == 4;
+            }
+            rocos::EcatConfig::getInstance(bus.id)->disconnect();
+            _exit(ok ? 0 : 1);
+        } catch (const std::exception& error) {
+            std::cerr << error.what() << std::endl;
+            _exit(2);
+        }
+    }
+    int status = 0;
+    REQUIRE(waitpid(child, &status, 0) == child);
+    REQUIRE(WIFEXITED(status));
+    CHECK(WEXITSTATUS(status) == 0);
 }

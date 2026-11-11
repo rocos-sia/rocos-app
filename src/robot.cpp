@@ -1244,8 +1244,10 @@ namespace rocos {
             JointInfo info;
             info.id = drive.id;
             info.name = drive.joint_name;
-            info.cnt_per_unit = drive.transform.cnt_per_unit;
+            info.pos_per_unit = drive.transform.pos_per_unit;
+            info.vel_per_unit = drive.transform.vel_per_unit;
             info.torque_per_unit = drive.transform.torque_per_unit;
+            info.load_torque_per_unit = drive.transform.load_torque_per_unit;
             info.ratio = drive.transform.ratio;
             info.unit_name = drive.transform.user_unit_name;
             info.zero_offset = drive.transform.offset_pos_cnt;

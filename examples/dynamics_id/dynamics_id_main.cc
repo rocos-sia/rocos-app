@@ -165,7 +165,9 @@ int main(int argc, char** argv) {
             YAML::Node joint;
             joint["name"] = drive.joint_name;
             joint["id"] = drive.id;
-            joint["cnt_per_unit"] = drive.transform.cnt_per_unit;
+            joint["pos_per_unit"] = drive.transform.pos_per_unit;
+            joint["vel_per_unit"] = drive.transform.vel_per_unit;
+            joint["load_torque_per_unit"] = drive.transform.load_torque_per_unit;
             joint["ratio"] = drive.transform.ratio;
             joint["offset_pos_cnt"] = drive.transform.offset_pos_cnt;
             joint["torque_per_unit"] = drive.transform.torque_per_unit;

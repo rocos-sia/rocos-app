@@ -1,0 +1,488 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "ROCOS API - robot/info v2",
+    "version": "3.0.0",
+    "description": "已于 2026-11-11 同步并通过 Apifox MCP 回读验证的局部 OpenAPI 快照。仅包含 robot/info 及对应模型；在线 Apifox ROCOS API 为权威来源。"
+  },
+  "paths": {
+    "/api/robot/info": {
+      "get": {
+        "summary": "获取机器人与控制器信息",
+        "deprecated": false,
+        "description": "读取软件、机器人模型、主站/ECM、从站清单和既有关节配置的信息基线。只读、无需控制权，不刷新控制权 TTL。连接/切换控制器时读取，可手动刷新，不作为高频状态流。\n\n当前 App 固定返回 info_schema_version=2 及全部扩展键；未接入项为 null，分组 source=placeholder。slaves 由驱动配置生成，不是扫描结果；slaves_complete=false。旧 App 仅返回 joint_infos 时 Viz 仍可连接并提示扩展信息未提供。将来用真实采集值替换占位值时保持 key、类型、单位和来源语义不变。 v2 将 joint_infos.cnt_per_unit 更名为 pos_per_unit，增加 vel_per_unit 与 load_torque_per_unit，客户端需要迁移。",
+        "tags": [
+          "机器人状态与信息"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/StandardResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/RobotInfoData"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "headers": {}
+          }
+        },
+        "security": []
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "RobotInfoData": {
+        "type": "object",
+        "properties": {
+          "info_schema_version": {
+            "type": "integer",
+            "description": "本响应信息模型版本，当前为 2。v2 将 joint_infos.cnt_per_unit 更名为 pos_per_unit，增加 vel_per_unit 与 load_torque_per_unit。v1 使用旧字段；缺省表示更早响应。新增可选字段不升版，破坏性调整须升级。",
+            "enum": [
+              2
+            ]
+          },
+          "controller": {
+            "type": "object",
+            "description": "控制器软件信息。",
+            "properties": {
+              "app_version": {
+                "type": "string",
+                "description": "App 编译版本（含预发布标识）。当前已接入真实编译值。"
+              },
+              "build_commit": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "App 构建对应 Git 提交；未知为 null。"
+              },
+              "api_version": {
+                "type": "string",
+                "description": "Apifox API 契约版本，与 App 版本及 info_schema_version 独立；当前 3.0.0。"
+              },
+              "shm_abi_version": {
+                "type": "integer",
+                "description": "App 编译采用的共享内存 ABI 版本；不表示已与主站完成握手。",
+                "minimum": 1
+              },
+              "capabilities": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "App 明确声明的能力，非完整功能清单。当前包含 robot_info_v2，表示 joint_infos 使用四个独立单位变换字段；未列出的能力不可推断为不支持。"
+              }
+            },
+            "required": [
+              "app_version",
+              "build_commit",
+              "api_version",
+              "shm_abi_version",
+              "capabilities"
+            ]
+          },
+          "robot": {
+            "type": "object",
+            "description": "机器人身份与模型元数据。当前 source=placeholder，其余未知字段为 null，mass_complete=false。Viz 现有 URDF 统计独立保留。",
+            "properties": {
+              "source": {
+                "type": "string",
+                "description": "数据来源：placeholder 尚未接入；configuration 配置文件；runtime 运行时读取。",
+                "enum": [
+                  "placeholder",
+                  "configuration",
+                  "runtime"
+                ]
+              },
+              "name": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "机器人模型名称。"
+              },
+              "package_version": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "机器人模型包版本。"
+              },
+              "device_id": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "机器人设备标识，用于本机配置关联；与产品序列号不同。"
+              },
+              "serial_number": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "机器人序列号，保留前导零。"
+              },
+              "dof": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "description": "机器人运动自由度；未知为 null。",
+                "minimum": 0
+              },
+              "base_link": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "运动学链基座 link 名。"
+              },
+              "tip_link": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "运动学链末端/法兰 link 名。"
+              },
+              "model_digest": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "模型包内容摘要，未来接入时采用 sha256:<64 位小写十六进制>；未知为 null。",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              },
+              "link_count": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "description": "模型连杆总数。",
+                "minimum": 0
+              },
+              "mass_kg": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "description": "已知模型质量之和，单位 kg；未知为 null；仅 mass_complete=true 时表示总质量。",
+                "minimum": 0
+              },
+              "mass_complete": {
+                "type": "boolean",
+                "description": "所有相关连杆质量是否完整；尚未接入时为 false。"
+              }
+            },
+            "required": [
+              "source",
+              "name",
+              "package_version",
+              "device_id",
+              "serial_number",
+              "dof",
+              "base_link",
+              "tip_link",
+              "model_digest",
+              "link_count",
+              "mass_kg",
+              "mass_complete"
+            ]
+          },
+          "master": {
+            "type": "object",
+            "description": "主站/仿真后端信息。当前为 placeholder + unknown，其余为 null。",
+            "properties": {
+              "source": {
+                "type": "string",
+                "description": "数据来源：placeholder 尚未接入；configuration 配置文件；runtime 运行时读取。",
+                "enum": [
+                  "placeholder",
+                  "configuration",
+                  "runtime"
+                ]
+              },
+              "backend": {
+                "type": "string",
+                "description": "控制后端；unknown 表示尚未确定，不得把配置从站当成实际 ECM 连接。",
+                "enum": [
+                  "unknown",
+                  "ecm",
+                  "igh",
+                  "mujoco"
+                ]
+              },
+              "version": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "主站程序版本；backend=ecm 时是 ECM 版本，其他后端是对应程序版本。"
+              },
+              "sdk_version": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "主站使用的 SDK 版本（如 EC-Master SDK），与主站程序版本分开。"
+              },
+              "master_id": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "description": "主站实例编号；0 是有效编号。",
+                "minimum": 0
+              },
+              "cycle_time_us": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "description": "主站周期，单位微秒。",
+                "minimum": 1
+              },
+              "configured_slave_count": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "description": "配置中的完整从站数量；未知为 null，不用当前不完整 slaves 数组长度代替。",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "source",
+              "backend",
+              "version",
+              "sdk_version",
+              "master_id",
+              "cycle_time_us",
+              "configured_slave_count"
+            ]
+          },
+          "slaves": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "从站清单条目。当前仅由既有驱动配置生成（role=drive, source=configuration）；identity_source=unknown，身份/PDO 字段为 null。不包含在线、WKC 等实时诊断状态。",
+              "properties": {
+                "id": {
+                  "type": "integer",
+                  "description": "配置条目 ID；当前对应 drives[].id。不是已扫描的物理位置或 EtherCAT 地址。"
+                },
+                "name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "从站设备名称。"
+                },
+                "joint_name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "关联关节名称；非关节设备可为 null。"
+                },
+                "role": {
+                  "type": "string",
+                  "description": "设备用途。",
+                  "enum": [
+                    "drive",
+                    "ft_sensor",
+                    "io",
+                    "unknown"
+                  ]
+                },
+                "source": {
+                  "type": "string",
+                  "description": "数据来源：placeholder 尚未接入；configuration 配置文件；runtime 运行时读取。",
+                  "enum": [
+                    "placeholder",
+                    "configuration",
+                    "runtime"
+                  ]
+                },
+                "vendor_id": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "description": "厂家标识（十进制无符号 32 位数）。",
+                  "minimum": 0,
+                  "maximum": 4294967295
+                },
+                "product_code": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "description": "产品代码（十进制无符号 32 位数）。",
+                  "minimum": 0,
+                  "maximum": 4294967295
+                },
+                "revision_number": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "description": "设备硬件/产品修订号（十进制无符号 32 位数），与固件版本分开。",
+                  "minimum": 0,
+                  "maximum": 4294967295
+                },
+                "serial_number": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "设备序列号；采用字符串保留格式和前导零。"
+                },
+                "firmware_version": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "从站固件版本。"
+                },
+                "identity_source": {
+                  "type": "string",
+                  "description": "身份字段来源：unknown 未获取；configuration 配置声明；device 实际设备回读。",
+                  "enum": [
+                    "unknown",
+                    "configuration",
+                    "device"
+                  ]
+                },
+                "input_pdo_count": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "description": "从站到主站方向的 PDO 映射条目数，不是字节数或 PDO 对象数。",
+                  "minimum": 0
+                },
+                "output_pdo_count": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "description": "主站到从站方向的 PDO 映射条目数，不是字节数或 PDO 对象数。",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "joint_name",
+                "role",
+                "source",
+                "vendor_id",
+                "product_code",
+                "revision_number",
+                "serial_number",
+                "firmware_version",
+                "identity_source",
+                "input_pdo_count",
+                "output_pdo_count"
+              ]
+            },
+            "description": "设备清单；当前仅配置驱动器。空数组不代表总线没有从站。"
+          },
+          "slaves_complete": {
+            "type": "boolean",
+            "description": "清单是否覆盖当前后端的全部从站；当前 false，不得据数组长度推断完整总线。"
+          },
+          "joint_infos": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "integer"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "torque_per_unit": {
+                  "type": "number",
+                  "description": "驱动器力矩码值/单位力矩（转动关节 N·m，移动关节 N），对应 transform.torque_per_unit，配置省略时为 1.0。返回实际生效值，必须有限且非零。驱动器力矩读回 = raw_torque / torque_per_unit；下发采用逆变换，不应用 ratio 或位置零点。"
+                },
+                "ratio": {
+                  "type": "number"
+                },
+                "unit_name": {
+                  "type": "string"
+                },
+                "zero_offset": {
+                  "type": "integer"
+                },
+                "pos_per_unit": {
+                  "type": "number",
+                  "description": "位置码值/用户单位（rad 或 m），对应 hardware.yaml 的 transform.pos_per_unit，配置省略时为 1.0。返回实际生效值，必须有限且非零，允许负值表示方向反转。位置读回 = (raw_position - zero_offset) / pos_per_unit / ratio；下发采用逆变换并取整、校验限位。"
+                },
+                "vel_per_unit": {
+                  "type": "number",
+                  "description": "速度码值/(用户单位/s)，对应 transform.vel_per_unit；配置省略时继承当前驱动器 pos_per_unit。返回实际生效值，必须有限且非零。速度读回 = raw_velocity / vel_per_unit / ratio；下发采用逆变换，不应用位置零点。"
+                },
+                "load_torque_per_unit": {
+                  "type": "number",
+                  "description": "负载力矩码值/单位力矩（转动关节 N·m，移动关节 N），对应 transform.load_torque_per_unit，配置省略时为 1.0。返回实际生效值，必须有限且非零。负载力矩读回 = raw_load_torque / load_torque_per_unit；torque_source 为 load_torque（int16 PDO）或 secondary_position（int32 PDO）均使用该比例，不应用位置零点、pos_per_unit 或 ratio。目前负载力矩只有读取接口；默认值不代表已完成传感器标定。"
+                }
+              },
+              "required": [
+                "pos_per_unit",
+                "vel_per_unit",
+                "torque_per_unit",
+                "load_torque_per_unit"
+              ]
+            },
+            "description": "驱动器关节配置及四个独立单位变换比例。v2 将 cnt_per_unit 更名为 pos_per_unit，并增加 vel_per_unit 与 load_torque_per_unit；torque_per_unit 保留并明确含义。客户端应按 info_schema_version 识别字段集合。"
+          }
+        },
+        "description": "robot/info 信息基线 v2。保留 joint_infos；扩展键在新 App 中固定返回，旧 App 可以仅有 joint_infos。未知值为 null，不能用 0/空字符串/示例版本冒充实测数据。当前只有 App 编译版本、编译 ABI、API 版本、能力标识和既有关节/驱动配置已接入；其余占位。 v2 的 joint_infos 返回 pos_per_unit、vel_per_unit、torque_per_unit、load_torque_per_unit，不再返回 cnt_per_unit。"
+      },
+      "StandardResponse": {
+        "type": "object",
+        "required": [
+          "success",
+          "code",
+          "message"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "code": {
+            "type": "integer",
+            "description": "业务状态码。0: 成功, 1xxx: 参数错误, 2xxx: 运动/规划错误, 3xxx: 状态错误, 4xxx: 标定错误, 5xxx: 异步任务错误, -6xxx: Lua 错误\n"
+          },
+          "message": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {}
+          }
+        }
+      }
+    }
+  }
+}

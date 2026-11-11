@@ -53,7 +53,7 @@ curl -s $BASE_URL/api/robot/info | python3 -m json.tool
 ```
 
 **预期：**
-- `data.joint_infos` 数组，每项含 `name`、`cnt_per_unit`、`torque_per_unit`、`ratio`、`unit_name`、`zero_offset`
+- `data.joint_infos` 数组，每项含 `name`、`pos_per_unit`、`vel_per_unit`、`torque_per_unit`、`load_torque_per_unit`、`ratio`、`unit_name`、`zero_offset`
 - 所有值为数值类型（非 null/空）
 
 ---

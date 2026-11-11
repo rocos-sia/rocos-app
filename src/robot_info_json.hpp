@@ -7,15 +7,16 @@
 
 namespace rocos {
 
-// 信息协议 v1：尚未接入的数据保持 null，配置驱动器不代表在线从站扫描结果。
+// 信息协议 v2：尚未接入的数据保持 null，配置驱动器不代表在线从站扫描结果。
 inline nlohmann::json robotInfoJson(const std::vector<Robot::JointInfo>& joints) {
     using Json = nlohmann::json;
     Json joint_infos = Json::array();
     Json slaves = Json::array();
     for (const auto& joint : joints) {
         joint_infos.push_back({{"id", joint.id}, {"name", joint.name},
-                               {"cnt_per_unit", joint.cnt_per_unit},
-                               {"torque_per_unit", joint.torque_per_unit}, {"ratio", joint.ratio},
+                               {"pos_per_unit", joint.pos_per_unit}, {"vel_per_unit", joint.vel_per_unit},
+                               {"torque_per_unit", joint.torque_per_unit},
+                               {"load_torque_per_unit", joint.load_torque_per_unit}, {"ratio", joint.ratio},
                                {"unit_name", joint.unit_name}, {"zero_offset", joint.zero_offset}});
         slaves.push_back({{"id", joint.id}, {"name", nullptr}, {"joint_name", joint.name},
                           {"role", "drive"}, {"source", "configuration"},
@@ -25,10 +26,10 @@ inline nlohmann::json robotInfoJson(const std::vector<Robot::JointInfo>& joints)
                           {"input_pdo_count", nullptr}, {"output_pdo_count", nullptr}});
     }
     return {
-        {"info_schema_version", 1},
+        {"info_schema_version", 2},
         {"controller", {{"app_version", ROCOS_APP_VERSION}, {"build_commit", nullptr},
                         {"api_version", "3.0.0"}, {"shm_abi_version", SHM_ABI_VERSION},
-                        {"capabilities", Json::array({"robot_info_v1"})}}},
+                        {"capabilities", Json::array({"robot_info_v2"})}}},
         {"robot", {{"source", "placeholder"}, {"name", nullptr}, {"package_version", nullptr},
                    {"device_id", nullptr}, {"serial_number", nullptr}, {"dof", nullptr},
                    {"base_link", nullptr}, {"tip_link", nullptr}, {"model_digest", nullptr},

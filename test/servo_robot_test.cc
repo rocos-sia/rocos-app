@@ -173,13 +173,13 @@ TEST_CASE("Hardware position counts round without bias and reject partial batche
     OfflineMaster offline;
     auto config = rocos::Hardware::LoadConfigFromYAML(offline.config().hardware_config);
     for (auto& drive : config.drives) {
-        drive.transform.cnt_per_unit = 156455.678;
+        drive.transform.pos_per_unit = 156455.678;
         drive.transform.ratio = drive.id ? -0.5 : 1.0;
         drive.transform.offset_pos_cnt = 123;
     }
     rocos::Hardware hardware(config, offline.id);
     for (const auto& drive : config.drives) {
-        const double scale = drive.transform.cnt_per_unit * drive.transform.ratio;
+        const double scale = drive.transform.pos_per_unit * drive.transform.ratio;
         for (int count : {-100000, -1, 0, 1, 100000}) {
             for (double direction : {-INFINITY, INFINITY}) {
                 hardware.SetJointPosition(drive.id, std::nextafter(count / scale, direction));

@@ -681,7 +681,7 @@ TEST_CASE("J6 J7 sine example validates startup and records normal interrupted a
     for (const auto& drive : hardware) {
         const auto transform = drive["transform"];
         info.push_back({{"id", drive["id"].as<int>()}, {"name", drive["joint_name"].as<std::string>()},
-                        {"cnt_per_unit", transform["cnt_per_unit"].as<double>()},
+                        {"pos_per_unit", transform["pos_per_unit"].as<double>()},
                         {"ratio", transform["ratio"].as<double>()}, {"unit_name", "rad"},
                         {"zero_offset", transform["offset_pos_cnt"].as<int>()}});
     }

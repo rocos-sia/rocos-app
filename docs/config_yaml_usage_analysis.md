@@ -104,9 +104,9 @@ RobotHttpServer(robot, ..., web_root) → runAsync(http_host, http_port)
 
 解析后，`Hardware` 构造函数建立 ID 查找表、连接 EtherCAT 共享内存并调用 [buildPDOCache()](../src/hardware.cpp#L1025)，按从站 ID 和 YAML 中的变量名查找 PDO 指针。运行时使用缓存指针，不会每周期重新解析 YAML。
 
-当前 Talon 文件包含七个 `driver`，不包含 `ft_sensor` 或 `io`。七轴都选 `torque_source: load_torque`，因此 [GetJointLoadTorque()](../src/hardware.cpp#L532) 读取 `inputs.load_torque_value` 指向的通道，按 `torque_per_unit` 换算；虽然也配置了 `secondary_position_value`，当前选择下它不作为此函数的返回来源。选 `secondary_position` 时才转而读取该通道并调用 `cntToUnit()`。
+当前 Talon 文件包含七个 `driver`，不包含 `ft_sensor` 或 `io`。七轴都选 `torque_source: load_torque`，因此 [GetJointLoadTorque()](../src/hardware.cpp#L532) 读取 `inputs.load_torque_value` 指向的通道，按 `load_torque_per_unit` 换算；虽然也配置了 `secondary_position_value`，当前选择下它不作为此函数的返回来源。选 `secondary_position` 时才转而读取该通道，同样按 `load_torque_per_unit` 换算，不扣位置零点或除传动比。
 
-位置换算位于 [hardware.cpp:398](../src/hardware.cpp#L398)，采用 `(raw_cnt - offset_pos_cnt) / cnt_per_unit / ratio`；力矩换算位于 [hardware.cpp:410](../src/hardware.cpp#L410)。`joint_name`、单位名称和转换参数也被 [Robot::GetJointInfo()](../src/robot.cpp#L1117) 用于关节信息输出。当前第 7 轴存在非零 `offset_pos_cnt`，属于实际参与换算的数据。
+位置换算位于 [hardware.cpp:398](../src/hardware.cpp#L398)，采用 `(raw_cnt - offset_pos_cnt) / pos_per_unit / ratio`；力矩换算位于 [hardware.cpp:410](../src/hardware.cpp#L410)。`joint_name`、单位名称和转换参数也被 [Robot::GetJointInfo()](../src/robot.cpp#L1117) 用于关节信息输出。当前第 7 轴存在非零 `offset_pos_cnt`，属于实际参与换算的数据。
 
 **文件被加载并不表示每个字段都进入控制算法：**
 

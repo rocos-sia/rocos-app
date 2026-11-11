@@ -62,8 +62,10 @@ class Robot {
   struct JointInfo {
     int id{-1};
     std::string name;
-    double cnt_per_unit{1.0};
+    double pos_per_unit{1.0};
+    double vel_per_unit{1.0};
     double torque_per_unit{1.0};
+    double load_torque_per_unit{1.0};
     double ratio{1.0};
     std::string unit_name{"rad"};
     int32_t zero_offset{0};

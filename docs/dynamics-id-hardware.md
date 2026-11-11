@@ -10,5 +10,5 @@
 - 辨识模型与摩擦参数的配置、CST 阻抗验证。
 - 位置与速度的零点规则、周期等待与离线回归测试。
 
-速度读取使用 `raw_velocity / cnt_per_unit / ratio`，不扣除位置零点。
+速度读取使用 `raw_velocity / vel_per_unit / ratio`，不扣除位置零点。
 `torque_per_unit` 保持 Hardware YAML 中的现有配置，标定另行处理。

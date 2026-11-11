@@ -77,12 +77,12 @@ Configuration loadConfiguration(const fs::path& path) {
         const auto transform = drive["transform"];
         if (transform["user_unit_name"].as<std::string>() != "rad")
             throw std::invalid_argument("Expected radian hardware units");
-        const double counts = transform["cnt_per_unit"].as<double>();
+        const double counts = transform["pos_per_unit"].as<double>();
         const double ratio = transform["ratio"].as<double>();
         if (!std::isfinite(counts) || counts <= 0 || !std::isfinite(ratio) || ratio == 0)
             throw std::invalid_argument("Invalid encoder scale");
         result.drives[i] = {{"id", drive["id"].as<int>()}, {"name", name},
-                           {"cnt_per_unit", transform["cnt_per_unit"].as<double>()},
+                           {"pos_per_unit", transform["pos_per_unit"].as<double>()},
                            {"ratio", transform["ratio"].as<double>()},
                            {"zero_offset", transform["offset_pos_cnt"].as<int>()}};
         const auto hw = drive["limit"];
@@ -152,7 +152,7 @@ Json checkConnectedModel(const Configuration& config, const std::string& host) {
         for (const auto& joint : joints) {
             if (joint.at("name") != expected.at("name")) continue;
             ++matches;
-            for (const char* field : {"id", "cnt_per_unit", "ratio", "zero_offset"})
+            for (const char* field : {"id", "pos_per_unit", "ratio", "zero_offset"})
                 if (joint.at(field) != expected.at(field))
                     throw std::runtime_error(std::string("Connected calibration differs: ") + field);
             if (joint.at("unit_name") != "rad") throw std::runtime_error("Connected units differ");

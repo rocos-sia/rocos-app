@@ -315,7 +315,7 @@ Node hardwareConfig(const Node& list, const std::string& where) {
             defaults = YAML::Load(R"(
 torque_source: load_torque
 limit: {lower: -2.71, upper: 2.71, vel: 3.0, acc: 10.0, jerk: 150.0, effort: 30.0, deceleration: 0.0, velocity_offset: 0.0, torque_rate: 200.0, following_error: 0.0}
-transform: {ratio: 1.0, offset_pos_cnt: 0, cnt_per_unit: 1.0, torque_per_unit: 1.0, user_unit_name: rad}
+transform: {ratio: 1.0, offset_pos_cnt: 0, pos_per_unit: 1.0, vel_per_unit: 1.0, torque_per_unit: 1.0, load_torque_per_unit: 1.0, user_unit_name: rad}
 inputs: {status_word: '', position_actual_value: '', velocity_actual_value: '', torque_actual_value: '', load_torque_value: '', secondary_position_value: '', digital_inputs: '', digital_outputs: ''}
 outputs: {control_word: '', mode_of_operation: '', target_position: '', target_velocity: '', target_torque: '', digital_outputs: ''}
 )");
@@ -344,6 +344,10 @@ outputs: {control_word: '', mode_of_operation: '', target_position: '', target_v
                             at + "." + name + ": unknown field " + value.first.as<std::string>());
             }
         }
+        // 速度比例继承本次配置的位置比例，再合并其它缺省值。
+        if (type == "driver" && node["transform"] && !node["transform"]["vel_per_unit"] &&
+            node["transform"]["pos_per_unit"])
+            defaults["transform"]["vel_per_unit"] = node["transform"]["pos_per_unit"].as<double>();
         node = merge(defaults, node);
         for (auto direction : {"inputs", "outputs"})
             if (node[direction]) {
@@ -356,7 +360,8 @@ outputs: {control_word: '', mode_of_operation: '', target_position: '', target_v
             require(number(limit, "lower", at) <= number(limit, "upper", at), at + ": lower exceeds upper");
             for (auto key : {"vel", "acc", "jerk", "effort", "deceleration", "velocity_offset", "torque_rate", "following_error"})
                 require(number(limit, key, at) >= 0, at + ".limit." + key + " must be nonnegative");
-            for (auto key : {"ratio", "cnt_per_unit", "torque_per_unit"})
+            for (auto key :
+                 {"ratio", "pos_per_unit", "vel_per_unit", "torque_per_unit", "load_torque_per_unit"})
                 require(number(transform, key, at) != 0, at + ".transform." + key + " must not be zero");
             integer(transform, "offset_pos_cnt", INT32_MIN, INT32_MAX, at);
             string(transform, "user_unit_name", at);
