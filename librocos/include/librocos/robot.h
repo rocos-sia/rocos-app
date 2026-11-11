@@ -28,6 +28,7 @@ class Duration {
 };
 
 struct ServoSnapshot {
+    // sample_time_ns 为控制器单调时钟，仅在同一会话内比较或计算差值。
     std::uint64_t cycle{}, sample_time_ns{}, source_time_us{};
     std::uint64_t received_message_id{}, applied_message_id{};
     JointArray q{}, dq{}, q_d{}, dq_d{}, ddq_d{}, q_cmd{}, tau_cmd{};
@@ -107,7 +108,7 @@ inline JointPositions MotionFinished(JointPositions command) {
 struct Options {
     std::uint16_t http_port{8080};
     std::uint16_t udp_port{8081};
-    // 当前 HTTP 契约的硬件周期可为 null，由调用者匹配实际配置。
+    // 名义硬件周期，用于启动探测/有界历史容量；control 由 App 的新周期状态驱动。
     std::chrono::microseconds control_period{1000};
     std::chrono::milliseconds receive_timeout{20};
     std::chrono::milliseconds startup_timeout{500};
@@ -129,7 +130,7 @@ class Robot {
     RciStatus rciStatus() const;
     void enableRci();
     void disableRci();
-    // 阻塞调用。回调与 UDP 收发在调用线程执行，首周期 period=0。
+    // 阻塞调用。每个新 App 周期回调并发送一次，首周期 period=0；无新状态不重发。
     void control(const std::function<JointPositions(const RobotState&, Duration)>& callback);
     // 可从另一线程请求结束 read/control，control 返回前等待服务端停止。
     // 回调应及时返回；回调阻塞期间由服务端通信看门狗负责保护。

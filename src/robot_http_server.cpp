@@ -2,6 +2,7 @@
 #include "robot_http_server.hpp"
 
 #include <spdlog/spdlog.h>
+#include <arpa/inet.h>
 
 #include <algorithm>
 #include <chrono>
@@ -1290,11 +1291,15 @@ void RobotHttpServer::handleRciDisable(const httplib::Request& req,
 
 void RobotHttpServer::handleRciStart(const httplib::Request& req,
                                      httplib::Response& res) {
-    // UDP 目前只绑定 loopback，避免远程 HTTP 客户端占用无法访问的会话。
-    if (req.remote_addr != "127.0.0.1" && req.remote_addr != "::1" &&
-        req.remote_addr != "::ffff:127.0.0.1") {
-        sendJson(res, false, resultCode(Result::IllegalParameter),
-                 "RCI control currently requires a local client");
+    std::string client_ip = req.remote_addr;
+    if (client_ip == "::1") client_ip = "127.0.0.1";
+    const std::string mapped_prefix = "::ffff:";
+    if (client_ip.compare(0, mapped_prefix.size(), mapped_prefix) == 0)
+        client_ip.erase(0, mapped_prefix.size());
+    in_addr client_address{};
+    if (inet_pton(AF_INET, client_ip.c_str(), &client_address) != 1 ||
+        client_address.s_addr == INADDR_ANY) {
+        sendJson(res, false, 1001, "RCI UDP requires an IPv4 client");
         return;
     }
     const auto body = req.body.empty()
@@ -1319,7 +1324,7 @@ void RobotHttpServer::handleRciStart(const httplib::Request& req,
     std::shared_ptr<ServoSession> session;
     const auto port = body.value("port", uint16_t{8081});
     const auto result = robot_->StartRciControl(
-        session, port, body.value("mode", std::string{"joint"}));
+        session, port, body.value("mode", std::string{"joint"}), ntohl(client_address.s_addr));
     auto data = robot_->GetRciStatus();
     if (resultSucceeded(result)) {
         data["port"] = port;

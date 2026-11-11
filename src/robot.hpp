@@ -235,7 +235,8 @@ class Robot {
   Result EnableRci();
   Result DisableRci();
   Result StartRciControl(std::shared_ptr<ServoSession>& session,
-                         uint16_t port = 8081, const std::string& mode = "joint");
+                         uint16_t port = 8081, const std::string& mode = "joint",
+                         uint32_t client_ipv4 = 0);
   Result StopRciControl();
   bool IsRciEnabled() const { return rci_enabled_.load(); }
   nlohmann::json GetRciStatus() const;

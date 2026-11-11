@@ -9,6 +9,7 @@
 namespace rocos {
 struct ServoSession {
     std::array<uint8_t, 16> id{};
+    uint32_t client_ipv4{0}; // 主机字节序，0 表示由首个有效包确定来源。
     std::atomic<bool> valid{true};
     std::atomic<int64_t> expires_ns{INT64_MAX};
     static int64_t Now() {

@@ -2,6 +2,7 @@
 #include <httplib.h>
 #include <librocos/robot.h>
 #include <netdb.h>
+#include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -15,6 +16,7 @@
 #include <limits>
 #include <mutex>
 #include <thread>
+#include <vector>
 
 #include "servo_type.hpp"
 
@@ -135,20 +137,11 @@ class UdpSocket {
         addrinfo* addresses = nullptr;
         if (getaddrinfo(udp_host.c_str(), nullptr, &hints, &addresses) != 0)
             throw NetworkException("Unable to resolve UDP host");
-        bool loopback = false;
-        for (auto* item = addresses; item; item = item->ai_next) {
-            const auto* address = reinterpret_cast<const sockaddr_in*>(item->ai_addr);
-            loopback = loopback || address->sin_addr.s_addr == htonl(INADDR_LOOPBACK);
-        }
+        sockaddr_in address = *reinterpret_cast<const sockaddr_in*>(addresses->ai_addr);
+        address.sin_port = htons(port);
         freeaddrinfo(addresses);
-        if (!loopback)
-            throw InvalidOperationException("RCI UDP v2 requires a local 127.0.0.1 client");
         fd_ = ::socket(AF_INET, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
         if (fd_ < 0) throw NetworkException("Unable to create UDP socket");
-        sockaddr_in address{};
-        address.sin_family = AF_INET;
-        address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-        address.sin_port = htons(port);
         if (::connect(fd_, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0) {
             ::close(fd_);
             throw NetworkException("Unable to connect UDP socket");
@@ -161,6 +154,18 @@ class UdpSocket {
     void send(const MotionGeneratorCommand& command) {
         if (::send(fd_, &command, sizeof(command), 0) != sizeof(command))
             throw NetworkException("Unable to send UDP command");
+    }
+
+    void waitUntil(Clock::time_point deadline) {
+        const auto remaining = deadline - Clock::now();
+        if (remaining <= Clock::duration::zero()) return;
+        // 保持 stop() 的快速响应；不使用此等待产生独立的发送节拍。
+        const auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::min(remaining, Clock::duration(std::chrono::milliseconds(1)))).count();
+        const timespec timeout{ns / 1000000000, ns % 1000000000};
+        pollfd ready{fd_, POLLIN, 0};
+        if (::ppoll(&ready, 1, &timeout, nullptr) < 0 && errno != EINTR)
+            throw NetworkException("Unable to wait for UDP state");
     }
 
     // 排空有界队列，校验原始 bool 字节后才构造协议结构体。
@@ -212,11 +217,6 @@ class UdpSocket {
             if (packet.cycle <= state.cycle || packet.sample_time_ns <= state.sample_time_ns)
                 continue;
             if (!packet.output_valid) throw ControlException("Controller output is invalid");
-            const auto now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                    Clock::now().time_since_epoch())
-                                    .count();
-            if (packet.sample_time_ns > static_cast<std::uint64_t>(now_ns))
-                throw ProtocolException("UDP sample timestamp is in the future");
             state = std::move(next);
             state.source = RobotState::Source::Udp;
             state.reference_valid = true;
@@ -495,29 +495,52 @@ void Robot::control(const std::function<JointPositions(const RobotState&, Durati
         }
         std::uint64_t callback_time = 0;
         std::uint64_t finished_id = 0;
-        auto next_tick = Clock::now();
+        bool fresh_state = state.reference_valid;
         auto last_fresh = Clock::now();
+        const auto motion_started = last_fresh;
+        struct SentCommand { std::uint64_t id{}; Clock::time_point time{}; };
+        std::vector<SentCommand> sent_commands;
+        const double acknowledgement_slots = std::ceil(
+            std::chrono::duration<double>(options.receive_timeout).count() /
+            std::chrono::duration<double>(options.control_period).count()) + 2;
+        if (acknowledgement_slots >= static_cast<double>(sent_commands.max_size()))
+            throw InvalidOperationException("Receive timeout requires too much command history");
+        sent_commands.resize(static_cast<std::size_t>(acknowledgement_slots));
         auto finish_deadline = Clock::time_point::max();
         while (!impl_->stop_requested) {
-            impl_->waitUntil(next_tick);
-            if (impl_->stop_requested) break;
-            if (socket.receive(command.session_id, initial.dof, reply_id, state))
-                last_fresh = Clock::now();
-            const auto sample_time =
-                Clock::time_point(std::chrono::nanoseconds(state.sample_time_ns));
-            if (Clock::now() - last_fresh >= options.receive_timeout ||
-                Clock::now() - sample_time >= options.receive_timeout)
+            if (!fresh_state)
+                fresh_state = socket.receive(command.session_id, initial.dof, reply_id, state);
+            if (fresh_state) last_fresh = Clock::now();
+            if (Clock::now() - last_fresh >= options.receive_timeout)
                 throw NetworkException("UDP feedback is stale or missing");
+            auto feedback_deadline = last_fresh + options.receive_timeout;
+            if (state.applied_message_id) {
+                const auto& sent = sent_commands[state.applied_message_id % sent_commands.size()];
+                if (sent.id != state.applied_message_id ||
+                    Clock::now() - sent.time >= options.receive_timeout)
+                    throw NetworkException("Applied command acknowledgement is stale or invalid");
+                feedback_deadline = std::min(feedback_deadline, sent.time + options.receive_timeout);
+            } else if (command.message_id && Clock::now() - motion_started >= options.receive_timeout) {
+                throw NetworkException("Timed out waiting for command application");
+            }
             if (finished_id && state.applied_message_id >= finished_id) break;
             if (Clock::now() >= finish_deadline)
                 throw NetworkException("Final command application was not confirmed");
-            if (!finished_id && state.sample_time_ns > callback_time) {
+            if (!fresh_state) {
+                socket.waitUntil(std::min(feedback_deadline, finish_deadline));
+                continue;
+            }
+            fresh_state = false;
+            if (finished_id) continue; // 最终指令只发送一次，等周期快照确认其应用。
+            if (state.sample_time_ns > callback_time) {
                 const Duration period(
                     callback_time ? std::chrono::nanoseconds(state.sample_time_ns - callback_time)
                                   : std::chrono::nanoseconds::zero());
+                const auto callback_started = Clock::now();
                 const auto generated = callback(state, period);
                 if (impl_->stop_requested) break;
-                if (Clock::now() - sample_time >= options.receive_timeout)
+                if (Clock::now() - callback_started >= options.receive_timeout ||
+                    Clock::now() >= feedback_deadline)
                     throw ControlException("Control callback exceeded feedback freshness deadline");
                 if (generated.dof != initial.dof)
                     throw ControlException("Joint command dimension mismatch");
@@ -537,10 +560,9 @@ void Robot::control(const std::function<JointPositions(const RobotState&, Durati
             if (command.message_id == std::numeric_limits<std::uint64_t>::max())
                 throw ControlException("UDP command sequence exhausted");
             ++command.message_id;
+            sent_commands[command.message_id % sent_commands.size()] = {command.message_id, Clock::now()};
             socket.send(command);
-            // 新采样到来前重发保持目标并推进序号，回调只处理新采样，超期不突发补发。
-            next_tick += options.control_period;
-            if (next_tick <= Clock::now()) next_tick = Clock::now() + options.control_period;
+            // 一个新控制周期只发送一次；无新状态不推进指令序号，不补发过期周期。
         }
         const auto status = impl_->finishSession();
         const auto code = faultCode(status);

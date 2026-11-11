@@ -21,6 +21,8 @@
 #include "feedback_validation.hpp"
 #include <openssl/rand.h>
 #include <poll.h>
+#include <sys/eventfd.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <chrono>
@@ -28,7 +30,9 @@
 #include <cstring>
 
 #include "log_manager.hpp"
+#include "logger.hpp"
 #include "position_command_validation.hpp"
+#include "realtime_thread.hpp"
 
 namespace rocos {
 
@@ -68,6 +72,11 @@ void MoveServo::Abort() {
         sock_.send_to(&state, sizeof(state), peer_);
     }
     sock_.close();
+    {
+        std::lock_guard<std::mutex> lock(mtx_);
+        if (cycle_event_fd_ >= 0) close(cycle_event_fd_);
+        cycle_event_fd_ = -1;
+    }
     peer_bound_ = false;
 }
 
@@ -121,7 +130,7 @@ Result MoveServo::Reset() {
     if (rc != Result::NoError) return rc;
 
     sock_ = sockpp::udp_socket{};
-    if (!sock_.is_open() || !sock_.bind(sockpp::inet_address("127.0.0.1", listen_port_))) {
+    if (!sock_.is_open() || !sock_.bind(sockpp::inet_address(INADDR_ANY, listen_port_))) {
         sock_.close();
         return Result::ServoBindFail;
     }
@@ -130,6 +139,21 @@ Result MoveServo::Reset() {
         sock_.close();
         return Result::ServoNotInitialized;
     }
+
+    cycle_event_fd_ = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+    if (cycle_event_fd_ < 0) {
+        sock_.close();
+        return Result::ServoNotInitialized;
+    }
+
+    std::string timing_error;
+    timing_trace_ = ServoTimingTrace::Create(session_->Hex(), timing_error);
+    timing_cycle_ = {};
+    if (timing_trace_)
+        Logger::getInstance("MoveServo")->info("Servo timing capture: {} (65536 records per stream)",
+                                               timing_trace_->Path());
+    else if (!timing_error.empty())
+        Logger::getInstance("MoveServo")->warn("Servo timing capture disabled: {}", timing_error);
 
     // 重置共享缓冲区
     {
@@ -163,6 +187,8 @@ Result MoveServo::Reset() {
         running_.store(false);
         stopped_.store(true);
         sock_.close();
+        close(cycle_event_fd_);
+        cycle_event_fd_ = -1;
         return Result::ServoThreadStartFailed;
     }
 
@@ -276,8 +302,15 @@ MoveServo::Diagnostics MoveServo::GetDiagnostics() const {
 // ============================================================================
 
 Result MoveServo::GenerateRef(Reference& ref_out) {
+    const auto entry_ns = timing_trace_ ? ServoTimingTrace::Now() : 0;
     std::lock_guard<std::mutex> lock(mtx_);
     ++cycle_;
+    if (timing_trace_) {
+        timing_cycle_ = {};
+        timing_cycle_.cycle = cycle_;
+        timing_cycle_.entry_ns = entry_ns;
+        timing_cycle_.locked_ns = ServoTimingTrace::Now();
+    }
     if (!hw_) return Result::ParameterPointerEqualsNullptr;
     if (!model_) return fillCurrentReference(ref_out);
     if (fault_ != Result::NoError) return fault_;
@@ -320,6 +353,10 @@ Result MoveServo::GenerateRef(Reference& ref_out) {
         ? std::chrono::duration_cast<std::chrono::nanoseconds>(now-last_cycle_at_).count()
         : period_ns;
     last_cycle_at_ = now;
+    if (timing_trace_) {
+        timing_cycle_.consumed_ns = ServoTimingTrace::Now();
+        timing_cycle_.consumed_id = cmd_.message_id;
+    }
     communication_.RecordCycle(cmd_.message_id != consumed_id_, elapsed_ns, period_ns);
     consumed_id_ = cmd_.message_id;
     if (communication_.FullWindow() &&
@@ -337,6 +374,7 @@ Result MoveServo::GenerateRef(Reference& ref_out) {
 
     Reference candidate;
     const bool first = !first_command_checked_;
+    if (timing_trace_) timing_cycle_.reference_id = first ? first_cmd_.message_id : cmd_.message_id;
     auto rc = commandReference(first ? first_cmd_ : cmd_, candidate);
     if (rc == Result::NoError && first) rc = validateStartReference(candidate);
     if (rc != Result::NoError) return fail(rc);
@@ -479,7 +517,7 @@ Result MoveServo::fillCurrentReference(Reference& ref_out) {
 }
 
 // ============================================================================
-// buildRobotState —— 从硬件读取状态并构建 RobotState（UDP 线程内调用）
+// buildRobotState —— 复制周期快照并添加回包序号（UDP 线程 / Abort join 后调用）
 // ============================================================================
 
 RobotState MoveServo::buildRobotState() {
@@ -554,73 +592,130 @@ void MoveServo::CompleteCycle(Result result) {
     state.mode=current_mode_;
     state.control_command_success_rate=communication_.SuccessRate();
     published_state_=state;
+    if (timing_trace_) {
+        timing_cycle_.applied_id = applied_id_;
+        timing_cycle_.result = static_cast<int>(result);
+        timing_cycle_.completed_ns = ServoTimingTrace::Now();
+        timing_trace_->PushControl(timing_cycle_);
+    }
+    if (running_.load() && cycle_event_fd_ >= 0) {
+        const uint64_t notify = 1;
+        // 非阻塞计数通知；积压时 UDP 只取最新快照，不逐次补发旧周期。
+        const auto written = write(cycle_event_fd_, &notify, sizeof(notify));
+        (void)written;
+    }
 }
 
 // ============================================================================
-// UDP 收发线程 —— 一次 loop：接收 MotionGeneratorCommand → 回复 RobotState
+// UDP 收发线程 —— 接收指令；由 CompleteCycle 通知推送最新 RobotState
 // ============================================================================
 
 void MoveServo::udpReceiveLoop() {
+    pthread_setname_np(pthread_self(), "rocos_servo_udp");
+    const auto scheduling = ConfigureRealtimeThread(20);
+    const auto logger = Logger::getInstance("MoveServo");
+    if (scheduling.ready()) logger->info("UDP scheduling: {}", scheduling.description());
+    else logger->warn("UDP realtime scheduling unavailable: {}", scheduling.description());
     uint64_t latest_message_id = 0;
     sockpp::inet_address peer;
     bool peer_bound=false;
+    sockpp::inet_address stream_peer;
+    bool stream_ready = false;
+    uint64_t sent_cycle = 0;
     // 多读一个字节，防止超长报文被截断成恰好合法的长度。
     std::array<char, sizeof(MotionGeneratorCommand) + 1> buf{};
     while (running_.load(std::memory_order_relaxed)) {
         sockpp::inet_address reply_addr;
         bool reply = false;
-        bool motion_reply = false;
         // 有界排空，持续来包也不能饿死回包或停止请求。
         for (int count = 0; count < 256 && running_.load(); ++count) {
             sockpp::inet_address addr;
             const auto n = sock_.recv_from(buf.data(), buf.size(), &addr);
+            const auto receive_ns = timing_trace_ && n > 0 ? ServoTimingTrace::Now() : 0;
             if (n < 0) break;
             if (n != sizeof(MotionGeneratorCommand)) continue;
             MotionGeneratorCommand command{};
             std::memcpy(&command, buf.data(), sizeof(command));
             if (!session_->Active() || command.protocol_version!=SERVO_PROTOCOL_VERSION ||
                 command.session_id!=session_->id) continue;
+            if (session_->client_ipv4 && addr.address() != session_->client_ipv4) continue;
             if (peer_bound && (addr.address()!=peer.address() || addr.port()!=peer.port())) continue;
             if (command.message_id == 0) {
-                // 查询不重置序号，也不覆盖运动指令对应的回包地址。
-                if (!motion_reply) {
-                    reply_addr = addr;
-                    reply = true;
+                // 查询只登记周期状态地址，不绑定运动端口或更新通信看门狗。
+                // 后续其他端口的查询可单次回复，不能改写已登记的推送地址。
+                if (!stream_ready) {
+                    stream_peer = addr;
+                    stream_ready = true;
+                }
+                reply_addr = addr;
+                reply = true;
+                continue;
+            }
+            ServoTimingTrace::UdpRecord timing{};
+            if (timing_trace_) {
+                timing.message_id = command.message_id;
+                timing.receive_ns = receive_ns;
+            }
+            if (command.message_id <= latest_message_id) {
+                if (timing_trace_) {
+                    timing.disposition = 3;
+                    timing_trace_->PushUdp(timing);
                 }
                 continue;
             }
-            if (command.message_id <= latest_message_id) continue;
             if (!peer_bound) {
                 peer=addr; peer_bound=true;
                 peer_=addr; peer_bound_=true; // 仅接收线程写，Abort join 后读取。
+                stream_peer = addr;
+                stream_ready = true;
             }
             latest_message_id = command.message_id;
             {
                 std::lock_guard<std::mutex> lock(mtx_);
+                if (timing_trace_) timing.locked_ns = ServoTimingTrace::Now();
                 if (!running_.load()) break;
                 if (stopping_ || fault_ != Result::NoError) {
                     // 停止期间仍回复状态，但永不替换已锁存的运动目标。
-                    reply_addr = addr;
-                    motion_reply = reply = true;
+                    if (timing_trace_) {
+                        timing.disposition = 2;
+                        timing_trace_->PushUdp(timing);
+                    }
                     continue;
                 }
                 if (!has_new_cmd_) first_cmd_ = command;
                 cmd_ = command;
                 has_new_cmd_ = true;
                 last_received_at_ = Clock::now();
+                if (timing_trace_) timing.ready_ns = ServoTimingTrace::Now();
             }
-            reply_addr = addr;
-            motion_reply = reply = true;
+            if (timing_trace_) {
+                timing.published_ns = ServoTimingTrace::Now();
+                timing.disposition = 1;
+                timing_trace_->PushUdp(timing);
+            }
         }
-        if (reply && running_.load()) {
+        // 同批次正序号包可能刚绑定端点，不把先前查询回复发给另一个端口。
+        if (reply && peer_bound && (reply_addr.address() != peer.address() ||
+                                   reply_addr.port() != peer.port())) reply = false;
+        uint64_t notifications = 0;
+        const bool cycle_ready = read(cycle_event_fd_, &notifications, sizeof(notifications)) ==
+                                 sizeof(notifications);
+        if (running_.load() && (reply || (cycle_ready && stream_ready))) {
             RobotState state = buildRobotState();
-            sock_.send_to(&state, sizeof(state), reply_addr);
+            if (reply) {
+                sock_.send_to(&state, sizeof(state), reply_addr);
+                if (stream_ready && reply_addr.address() == stream_peer.address() &&
+                    reply_addr.port() == stream_peer.port()) sent_cycle = state.cycle;
+            }
+            if (cycle_ready && stream_ready && state.cycle > sent_cycle) {
+                sock_.send_to(&state, sizeof(state), stream_peer);
+                sent_cycle = state.cycle;
+            }
         }
         if (running_.load()) {
-            // 来包立即唤醒；固定休眠会把已到达内核的包延后到下一控制周期。
-            // 有界等待保证 Abort 不依赖继续来包才能回收线程。
-            pollfd ready{sock_.handle(), POLLIN, 0};
-            ::poll(&ready, 1, 1);
+            // 两种事件均立即唤醒，保持原有 1 ms 有界等待和停止回收行为。
+            pollfd ready[]{{sock_.handle(), POLLIN, 0}, {cycle_event_fd_, POLLIN, 0}};
+            ::poll(ready, 2, 1);
         }
     }
 }

@@ -35,12 +35,13 @@
 #include "servo_signal_processor.hpp"
 #include "servo_type.hpp"
 #include "servo_session.hpp"
+#include "servo_timing_trace.hpp"
 
 namespace rocos {
 
 /// @brief UDP 伺服运动模式 —— 接收外部 MotionGeneratorCommand 并生成 Reference
 ///
-/// UDP 线程接收指令并回复状态；控制线程生成 Reference。
+/// UDP 线程接收指令并按控制周期推送状态；控制线程生成 Reference。
 /// 首条运动指令单独保留并校验，后续使用序号严格递增的最新指令。
 /// 生命周期：SERVOING → STOPPING → STOPPED；校验失败进入 ERROR_STATE。
 /// mtx_ 保护指令、首点检查和模式切换；停止后才释放 socket。
@@ -137,6 +138,7 @@ class MoveServo : public MotionInterface {
 
   // ─── UDP 接收线程 ───
   std::thread thread_;
+  int cycle_event_fd_{-1}; // CompleteCycle 通知 UDP；关闭与写入由 mtx_ 串行化。
 
   // ─── 原子标志 ───
   std::atomic<bool> running_{false};
@@ -150,6 +152,8 @@ class MoveServo : public MotionInterface {
   Frame tool_;
   ServoSignalProcessor processor_;
   ServoCommunication communication_;
+  std::unique_ptr<ServoTimingTrace> timing_trace_;
+  ServoTimingTrace::ControlRecord timing_cycle_{};
   bool processor_ready_{false}, stopping_{false}, stop_complete_{false};
   Result stop_reason_{Result::NoError};
   uint64_t consumed_id_{0}, cycle_{0};

@@ -5,6 +5,7 @@
 #include <unistd.h>
 
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <thread>
@@ -17,12 +18,20 @@
 
 namespace rocos {
 struct RobotHttpServerTestAccess {
+    static nlohmann::json startFrom(RobotHttpServer& server, const std::string& address, int port) {
+        httplib::Request request;
+        request.remote_addr = address;
+        request.body = nlohmann::json{{"port", port}}.dump();
+        httplib::Response response;
+        server.handleRciStart(request, response);
+        return nlohmann::json::parse(response.body);
+    }
     static void expire(RobotHttpServer& server) {
         std::lock_guard<std::mutex> lock(server.control_mutex_);
         server.last_seen_at_ = std::chrono::steady_clock::now() - std::chrono::hours(1);
     }
-    static int start(RobotHttpServer& server) {
-        const int port = server.server_->bind_to_any_port("127.0.0.1");
+    static int start(RobotHttpServer& server, const std::string& host = "127.0.0.1") {
+        const int port = server.server_->bind_to_any_port(host);
         REQUIRE(port > 0);
         server.thread_ = std::make_unique<std::thread>(
             [&server] { server.server_->listen_after_bind(); });
@@ -190,6 +199,8 @@ TEST_CASE("Hardware position counts round without bias and reject partial batche
 }
 
 TEST_CASE("librocos actual HTTP and UDP joint servo with offline master") {
+    const char* configured_host = std::getenv("ROCOS_TEST_IPV4");
+    const std::string host = configured_host ? configured_host : "127.0.0.1";
     OfflineMaster offline;
     auto config = offline.config();
     config.hardware = rocos::Hardware::LoadConfigFromYAML(config.hardware_config);
@@ -197,15 +208,15 @@ TEST_CASE("librocos actual HTTP and UDP joint servo with offline master") {
     rocos::Robot controller(config);
     rocos::RobotHttpServer server(&controller);
     librocos::Options options;
-    options.http_port = rocos::RobotHttpServerTestAccess::start(server);
+    options.http_port = rocos::RobotHttpServerTestAccess::start(server, host);
     sockpp::udp_socket reservation;
-    REQUIRE(reservation.bind(sockpp::inet_address("127.0.0.1", 0)));
+    REQUIRE(reservation.bind(sockpp::inet_address(host, 0)));
     options.udp_port = sockpp::inet_address(reservation.address()).port();
     reservation.close();
     REQUIRE(controller.SetEnabled() == Result::NoError);
     offline.follow_targets = true;
     REQUIRE(controller.hardware->GetJointDerivativeLimits()[0].jerk == 10000);
-    librocos::Robot client("127.0.0.1", options);
+    librocos::Robot client(host, options);
     REQUIRE(client.readOnce().dof == 2);
     client.enableRci();
     double largest_tracking_error = 0;
@@ -504,6 +515,58 @@ TEST_CASE_FIXTURE(Fixture,
     CHECK(restarted["data"]["session_id"] != started["data"]["session_id"]);
     REQUIRE(post("/api/robot/rci/stop", Json::object())["success"] == true);
     REQUIRE(awaitState("STOPPED"));
+}
+
+TEST_CASE_FIXTURE(Fixture, "RCI remote IPv4 session restricts UDP origin and endpoint") {
+    sockpp::udp_socket reservation;
+    REQUIRE(reservation.bind(sockpp::inet_address("127.0.0.2", 0)));
+    const auto port = sockpp::inet_address(reservation.address()).port();
+    reservation.close();
+    REQUIRE(robot.EnableRci() == Result::NoError);
+    const auto started = rocos::RobotHttpServerTestAccess::startFrom(server, "127.0.0.2", port);
+    REQUIRE(started["success"] == true);
+    auto* motion = dynamic_cast<rocos::MoveServo*>(robot.motion.get());
+    REQUIRE(motion);
+    const auto session = motion->GetSession();
+    CHECK(session->client_ipv4 == 0x7f000002u);
+    sockpp::udp_socket authorized, wrong_ip, wrong_port;
+    REQUIRE(authorized.bind(sockpp::inet_address("127.0.0.2", 0)));
+    REQUIRE(wrong_ip.bind(sockpp::inet_address("127.0.0.1", 0)));
+    REQUIRE(wrong_port.bind(sockpp::inet_address("127.0.0.2", 0)));
+    for (auto* socket : {&authorized, &wrong_ip, &wrong_port})
+        REQUIRE(socket->set_non_blocking(true));
+    MotionGeneratorCommand command{};
+    command.session_id = session->id;
+    command.message_id = 1;
+    const auto target = sockpp::inet_address("127.0.0.2", port);
+    // 错误源 IP 即使持有会话 ID，也不能预先绑定会话或查询状态。
+    REQUIRE(wrong_ip.send_to(&command, sizeof(command), target) == sizeof(command));
+    std::this_thread::sleep_for(std::chrono::milliseconds(3));
+    ::RobotState state{};
+    CHECK(wrong_ip.recv(&state, sizeof(state)) < 0);
+    REQUIRE(authorized.send_to(&command, sizeof(command), target) == sizeof(command));
+    bool replied = false;
+    for (int i = 0; i < 10; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        if (authorized.recv(&state, sizeof(state)) == sizeof(state)) { replied = true; break; }
+    }
+    REQUIRE(replied);
+    command.message_id = 100;
+    REQUIRE(wrong_port.send_to(&command, sizeof(command), target) == sizeof(command));
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    CHECK(wrong_port.recv(&state, sizeof(state)) < 0);
+    command.message_id = 0;
+    REQUIRE(authorized.send_to(&command, sizeof(command), target) == sizeof(command));
+    for (int i = 0; i < 5; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        if (authorized.recv(&state, sizeof(state)) == sizeof(state)) break;
+    }
+    CHECK(state.received_message_id == 1);
+    REQUIRE(robot.StopRciControl() == Result::NoError);
+    REQUIRE(awaitState("STOPPED"));
+    CHECK_FALSE(session->Active());
+    const auto unsupported = rocos::RobotHttpServerTestAccess::startFrom(server, "2001:db8::1", port);
+    CHECK(unsupported["code"] == 1001);
 }
 
 TEST_CASE_FIXTURE(

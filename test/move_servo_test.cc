@@ -14,6 +14,9 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstring>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <limits>
 #include <string>
 #include <variant>
@@ -243,6 +246,16 @@ MotionGeneratorCommand jointCommand(uint64_t id, double q0 = 0, double q1 = 0,
     cmd.tcp_c[11] = q2;
     return cmd;
 }
+// 运动包不再逐包回显；离线测试等待共享目标发布，查询仍可充当接收队列屏障。
+void awaitCommand(rocos::MoveServo& move, uint64_t id) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(200);
+    for (;;) {
+        const auto d = move.GetDiagnostics();
+        if (d.received_id >= id || d.stopping || d.fault != Result::NoError) return;
+        REQUIRE(std::chrono::steady_clock::now() < deadline);
+        std::this_thread::sleep_for(std::chrono::microseconds(50));
+    }
+}
 struct ServoFixture {
     FakeHardware hw{makeJntArray(0, 0, 0)};
     FakeModel model;
@@ -257,7 +270,8 @@ struct ServoFixture {
     }
     void exchange(const MotionGeneratorCommand& cmd) {
         client.send(port, cmd);
-        REQUIRE(client.receive());
+        if (cmd.message_id) awaitCommand(move, cmd.message_id);
+        else REQUIRE(client.receive());
     }
     void barrier() { exchange(jointCommand(0)); }
 };
@@ -432,7 +446,7 @@ TEST_CASE("MoveServo compares the first target to nonzero actual feedback") {
         expected = Result::HomePositionError;
     }
     client.send(port, cmd);
-    REQUIRE(client.receive());
+    awaitCommand(move, cmd.message_id);
     rocos::Reference ref;
     CHECK(move.GenerateRef(ref) == expected);
 }
@@ -592,7 +606,7 @@ TEST_CASE("Servo sustained low quality stops even without a long loss burst") {
     for (int i = 0; i < 104 && !move.GetDiagnostics().stopping; ++i) {
         if (i % 2 == 0) {
             client.send(port, jointCommand(++id));
-            REQUIRE(client.receive());
+            awaitCommand(move, id);
         }
         REQUIRE(move.GenerateRef(ref) == Result::NoError);
     }
@@ -611,6 +625,8 @@ TEST_CASE("Servo cartesian first point checks the active tool independently of o
     UdpClient client;
     client.session=move.GetSession();
     client.send(port, jointCommand(1, .2));
+    awaitCommand(move, 1);
+    client.send(port, jointCommand(0)); // 首点前快照通过显式查询获得，不依赖运动包回显。
     RobotState state{};
     REQUIRE(client.socket.recv_from(&state, sizeof(state)) == sizeof(state));
     CHECK(state.flange_to_base[3] == 0);
@@ -738,7 +754,7 @@ TEST_CASE("Servo first point respects position dependent directional tolerance")
     UdpClient client;
     client.session=move.GetSession();
     client.send(port, jointCommand(1, 9.99998));
-    REQUIRE(client.receive());
+    awaitCommand(move, 1);
     rocos::Reference ref = rocos::Frame::Identity();
     CHECK(move.GenerateRef(ref) == Result::HomePositionError);
     CHECK(std::holds_alternative<rocos::Frame>(ref));
@@ -1245,4 +1261,114 @@ TEST_CASE("Franka position limiting follows feasible periodic targets without tr
         }
         CHECK(peak_error < 1e-12);
     }
+}
+
+TEST_CASE("MoveServo timing separates consumed first reference and applied sequence") {
+    struct Environment {
+        const char* value = std::getenv("ROCOS_SERVO_TIMING_TRACE");
+        bool present = value != nullptr;
+        std::string old = value ? value : "";
+        Environment() { setenv("ROCOS_SERVO_TIMING_TRACE", "1", 1); }
+        ~Environment() {
+            if (present) setenv("ROCOS_SERVO_TIMING_TRACE", old.c_str(), 1);
+            else unsetenv("ROCOS_SERVO_TIMING_TRACE");
+        }
+    } environment;
+    std::filesystem::path path;
+    {
+        ServoFixture fixture;
+        path = "/dev/shm/rocos-servo-timing/servo_" + std::to_string(getpid()) + "_" +
+               fixture.move.GetSession()->Hex() + ".bin";
+        REQUIRE(std::filesystem::exists(path));
+        fixture.exchange(jointCommand(10));
+        fixture.exchange(jointCommand(12));
+        REQUIRE(fixture.move.GenerateRef(fixture.ref) == Result::NoError);
+        fixture.move.CompleteCycle(Result::NoError);
+        REQUIRE(fixture.move.GenerateRef(fixture.ref) == Result::NoError);
+        fixture.move.CompleteCycle(Result::NoError);
+    }
+    std::ifstream file(path, std::ios::binary);
+    std::array<char, 256> header{};
+    REQUIRE(file.read(header.data(), header.size()));
+    uint64_t udp_count, control_count;
+    std::memcpy(&udp_count, header.data() + 128, 8);
+    std::memcpy(&control_count, header.data() + 192, 8);
+    CHECK(udp_count == 2);
+    CHECK(control_count == 2);
+    rocos::ServoTimingTrace::UdpRecord udp{};
+    REQUIRE(file.read(reinterpret_cast<char*>(&udp), sizeof(udp)));
+    CHECK(udp.message_id == 10);
+    CHECK(udp.receive_ns <= udp.locked_ns);
+    CHECK(udp.locked_ns <= udp.ready_ns);
+    CHECK(udp.ready_ns <= udp.published_ns);
+    rocos::ServoTimingTrace::ControlRecord first{}, second{};
+    file.seekg(256 + sizeof(udp) * rocos::ServoTimingTrace::kCapacity);
+    REQUIRE(file.read(reinterpret_cast<char*>(&first), sizeof(first)));
+    REQUIRE(file.read(reinterpret_cast<char*>(&second), sizeof(second)));
+    CHECK(first.entry_ns <= first.locked_ns);
+    CHECK(first.locked_ns <= first.consumed_ns);
+    CHECK(first.consumed_ns <= first.completed_ns);
+    CHECK(first.consumed_id == 12);
+    CHECK(first.reference_id == 10); // 首点不能被较新的 12 号覆盖。
+    CHECK(first.applied_id == 10);
+    CHECK(second.consumed_id == 12);
+    CHECK(second.reference_id == 12);
+    CHECK(second.applied_id == 12);
+    file.close();
+    std::filesystem::remove(path);
+}
+
+TEST_CASE_FIXTURE(ServoFixture, "Servo pushes completed cycles without commands or watchdog credit") {
+    barrier(); // 合法零序号查询登记周期接收地址。
+    for (uint64_t cycle = 1; cycle <= 8; ++cycle) {
+        REQUIRE(move.GenerateRef(ref) == Result::NoError);
+        move.CompleteCycle(Result::NoError);
+        RobotState state{};
+        REQUIRE(client.socket.recv_from(&state, sizeof(state)) == sizeof(state));
+        CHECK(state.cycle == cycle);
+        CHECK(state.received_message_id == 0);
+        CHECK(state.applied_message_id == 0);
+        CHECK(state.control_command_success_rate == 0);
+    }
+    CHECK(move.GetDiagnostics().control_cycles == 0);
+    CHECK(move.GetDiagnostics().received_id == 0);
+}
+
+TEST_CASE_FIXTURE(ServoFixture, "Servo motion publication does not echo old state") {
+    barrier();
+    exchange(jointCommand(1));
+    const timeval short_timeout{0, 5000};
+    REQUIRE(client.socket.set_option(SOL_SOCKET, SO_RCVTIMEO, short_timeout));
+    CHECK_FALSE(client.receive()); // 没有 CompleteCycle，不能伪造一个新周期回复。
+    REQUIRE(move.GenerateRef(ref) == Result::NoError);
+    move.CompleteCycle(Result::NoError);
+    RobotState state{};
+    REQUIRE(client.socket.recv_from(&state, sizeof(state)) == sizeof(state));
+    CHECK(state.cycle == 1);
+    CHECK(state.applied_message_id == 1);
+}
+
+TEST_CASE_FIXTURE(ServoFixture, "Servo query subscription does not hijack the motion endpoint") {
+    barrier();
+    UdpClient other;
+    other.session = move.GetSession();
+    other.send(port, jointCommand(0));
+    REQUIRE(other.receive()); // 绑定运动端点前允许同一授权来源的单次查询。
+    REQUIRE(move.GenerateRef(ref) == Result::NoError);
+    move.CompleteCycle(Result::NoError);
+    RobotState state{};
+    REQUIRE(client.socket.recv_from(&state, sizeof(state)) == sizeof(state));
+    CHECK(state.cycle == 1); // 周期推送仍指向第一个查询端点。
+    const timeval timeout{0, 5000};
+    REQUIRE(other.socket.set_option(SOL_SOCKET, SO_RCVTIMEO, timeout));
+    CHECK_FALSE(other.receive());
+    other.send(port, jointCommand(1)); // 首个正序号包才绑定正式运动端点。
+    awaitCommand(move, 1);
+    REQUIRE(move.GenerateRef(ref) == Result::NoError);
+    move.CompleteCycle(Result::NoError);
+    REQUIRE(other.socket.recv_from(&state, sizeof(state)) == sizeof(state));
+    CHECK(state.applied_message_id == 1);
+    REQUIRE(client.socket.set_option(SOL_SOCKET, SO_RCVTIMEO, timeout));
+    client.send(port, jointCommand(0));
+    CHECK_FALSE(client.receive()); // 绑定后旧查询端口不能再接收状态。
 }

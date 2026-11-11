@@ -28,7 +28,7 @@ find_package(LibArchive REQUIRED)
 find_package(OpenSSL REQUIRED)
 
 # CMake VERSION 仅接受数字；完整 SemVer 版本单独拼接。
-set(ROCOS_APP_VERSION_PRERELEASE "rc.9")
+set(ROCOS_APP_VERSION_PRERELEASE "rc.10")
 set(ROCOS_APP_VERSION_FULL "${PROJECT_VERSION}")
 if(NOT ROCOS_APP_VERSION_PRERELEASE STREQUAL "")
     string(APPEND ROCOS_APP_VERSION_FULL "-${ROCOS_APP_VERSION_PRERELEASE}")
@@ -538,6 +538,9 @@ set_tests_properties(librocos_robot_test PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} TIMEOUT 60 RUN_SERIAL TRUE)
 set_tests_properties(servo_robot_test PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} TIMEOUT 30)
+
+add_executable(servo_timing_trace_test test/servo_timing_trace_test.cc)
+add_test(NAME servo_timing_trace_test COMMAND servo_timing_trace_test)
 
 add_executable(servo_trace_test test/servo_trace_test.cc)
 target_link_libraries(servo_trace_test PRIVATE robot)

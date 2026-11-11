@@ -46,6 +46,7 @@
 #include "move_svd_jog.hpp"
 #include "move_servo.hpp"
 #include "position_controller.hpp"
+#include "realtime_thread.hpp"
 #include "zero_force_drag_controller.hpp"
 
 namespace {
@@ -506,6 +507,10 @@ namespace rocos {
         control_thread_alive_.store(true);
         last_control_progress_ns_.store(ServoSession::Now());
         watchdog_thread_=std::thread([this] {
+            pthread_setname_np(pthread_self(), "rocos_watchdog");
+            const auto scheduling = ConfigureRealtimeThread(21);
+            if (scheduling.ready()) log_ptr_->info("Watchdog scheduling: {}", scheduling.description());
+            else log_ptr_->warn("Watchdog realtime scheduling unavailable: {}", scheduling.description());
             const int64_t timeout=int64_t(hardware->GetDt())*servo_settings_.max_missing_cycles*1000;
             while (watchdog_running_.load()) {
                 if (servo_watchdog_armed_.load() && timeout>0 &&
@@ -519,6 +524,10 @@ namespace rocos {
             }
         });
         control_thread_ = std::thread([this]() {
+            pthread_setname_np(pthread_self(), "rocos_control");
+            const auto scheduling = ConfigureRealtimeThread(20);
+            if (scheduling.ready()) log_ptr_->info("Control scheduling: {}", scheduling.description());
+            else log_ptr_->warn("Control realtime scheduling unavailable: {}", scheduling.description());
             bindRtLogProducer(rt_log_producer_.get());
             const auto monotonic_us = std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now().time_since_epoch()).count();
@@ -2004,7 +2013,8 @@ namespace rocos {
     }
 
     Result Robot::StartRciControl(std::shared_ptr<ServoSession>& session,
-                                  uint16_t port, const std::string& mode) {
+                                  uint16_t port, const std::string& mode,
+                                  uint32_t client_ipv4) {
         auto command_lock = LockToolState();
         auto state_lock = impl_->lockState();
         if (!rci_enabled_) return Result::ServoNotInitialized;
@@ -2014,6 +2024,7 @@ namespace rocos {
         if (port == 0 || (mode != "joint" && mode != "cartesian"))
             return Result::IllegalParameter;
         auto next = std::make_shared<ServoSession>();
+        next->client_ipv4 = client_ipv4;
         servo_mode_ = mode == "joint" ? MotionMode::kJointPosition
                                       : MotionMode::kCartesianPosition;
         rci_active_ = true;
