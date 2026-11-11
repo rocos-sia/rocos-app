@@ -495,6 +495,8 @@ void Robot::control(const std::function<JointPositions(const RobotState&, Durati
         }
         std::uint64_t callback_time = 0;
         std::uint64_t finished_id = 0;
+        // 跟随 App 新周期响应，避免独立定时发送的相位漂移；网络突发仍需超时保护。
+        // 原因与排查：docs/servo_timing_root_cause_and_diagnosis.md。
         bool fresh_state = state.reference_valid;
         auto last_fresh = Clock::now();
         const auto motion_started = last_fresh;

@@ -357,6 +357,8 @@ Result MoveServo::GenerateRef(Reference& ref_out) {
         timing_cycle_.consumed_ns = ServoTimingTrace::Now();
         timing_cycle_.consumed_id = cmd_.message_id;
     }
+    // 统计取用点的新序号覆盖；包全到但发布跨过取用边界时仍会记缺帧。
+    // 原因与排查：docs/servo_timing_root_cause_and_diagnosis.md。
     communication_.RecordCycle(cmd_.message_id != consumed_id_, elapsed_ns, period_ns);
     consumed_id_ = cmd_.message_id;
     if (communication_.FullWindow() &&
@@ -600,6 +602,7 @@ void MoveServo::CompleteCycle(Result result) {
     }
     if (running_.load() && cycle_event_fd_ >= 0) {
         const uint64_t notify = 1;
+        // 用控制周期驱动状态，避免等客户端独立 1 ms 节拍来包才回复旧快照。
         // 非阻塞计数通知；积压时 UDP 只取最新快照，不逐次补发旧周期。
         const auto written = write(cycle_event_fd_, &notify, sizeof(notify));
         (void)written;
