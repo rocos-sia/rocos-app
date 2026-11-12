@@ -13,14 +13,17 @@
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
-#include <cstring>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <limits>
 #include <string>
 #include <variant>
 #include <vector>
+
+#include "src/executor.hpp"
+#include "src/position_controller.hpp"
 
 namespace {
 
@@ -993,17 +996,24 @@ TEST_CASE("Servo continuity tolerance scales with control period") {
     }
 }
 
-TEST_CASE("Servo validates position and velocity following separately") {
+TEST_CASE("Servo ignores position and velocity following errors and retains finite checks") {
     FakeModel model;
     rocos::ServoSignalProcessor processor;
     auto limits = std::vector<rocos::JointDerivativeLimits>(3, {10, 150, 10, 0});
     REQUIRE(processor.Reset(&model, limits, makeJntArray(0, 0, 0), .001, {}) == Result::NoError);
     CHECK(processor.CheckFeedback(makeJntArray(.019, 0, 0), makeJntArray(.19, 0, 0)) == Result::NoError);
-    CHECK(processor.CheckFeedback(makeJntArray(.021, 0, 0), makeJntArray(0, 0, 0)) == Result::NotFollowPositionCmd);
-    CHECK(processor.CheckFeedback(makeJntArray(0, 0, 0), makeJntArray(.21, 0, 0)) == Result::OutRangeFeedback);
+    CHECK(processor.CheckFeedback(makeJntArray(.5, 0, 0), makeJntArray(0, 0, 0)) ==
+          Result::NoError);
+    CHECK(processor.CheckFeedback(makeJntArray(0, 0, 0), makeJntArray(.5, 0, 0)) ==
+          Result::NoError);
     limits[0].following_error = .005;
     REQUIRE(processor.Reset(&model, limits, makeJntArray(0, 0, 0), .001, {}) == Result::NoError);
-    CHECK(processor.CheckFeedback(makeJntArray(.006, 0, 0), makeJntArray(0, 0, 0)) == Result::NotFollowPositionCmd);
+    CHECK(processor.CheckFeedback(makeJntArray(.006, 0, 0), makeJntArray(0, 0, 0)) ==
+          Result::NoError);
+    CHECK(processor.CheckFeedback(makeJntArray(std::numeric_limits<double>::quiet_NaN(), 0, 0),
+                                  makeJntArray(0, 0, 0)) == Result::ParameterNanOrInf);
+    CHECK(processor.CheckFeedback(makeJntArray(0, 0, 0), makeJntArray(INFINITY, 0, 0)) ==
+          Result::ParameterNanOrInf);
 }
 
 TEST_CASE("Servo rejects infeasible Cartesian output without modifying the brake state") {
@@ -1040,32 +1050,113 @@ TEST_CASE_FIXTURE(ServoFixture, "Servo latches IK continuity fault and brakes be
     CHECK(move.GetDiagnostics().desired_acceleration.data.norm() == 0);
 }
 
-TEST_CASE_FIXTURE(ServoFixture, "Servo latches actual feedback tracking faults separately from communication") {
+TEST_CASE_FIXTURE(ServoFixture, "Servo continues with position and velocity following lag") {
     exchange(jointCommand(1));
     REQUIRE(move.GenerateRef(ref) == Result::NoError);
-    Result expected;
     SUBCASE("actual position lag") {
-        hw.setFeedbackPosition(makeJntArray(.021, 0, 0));
-        expected = Result::NotFollowPositionCmd;
+        hw.setFeedbackPosition(makeJntArray(.5, 0, 0));
+        REQUIRE(move.GenerateRef(ref) == Result::NoError);
+        CHECK_FALSE(move.GetDiagnostics().stopping);
+        CHECK(move.GetDiagnostics().fault == Result::NoError);
     }
     SUBCASE("actual velocity lag") {
-        hw.feedback_velocity0 = .21;
-        expected = Result::OutRangeFeedback;
+        hw.feedback_velocity0 = .5;
+        REQUIRE(move.GenerateRef(ref) == Result::NoError);
+        CHECK_FALSE(move.GetDiagnostics().stopping);
+        CHECK(move.GetDiagnostics().fault == Result::NoError);
     }
-    REQUIRE(move.GenerateRef(ref) == Result::NoError);
-    CHECK(move.GetDiagnostics().stopping);
-    CHECK(move.GetDiagnostics().fault == expected);
-    CHECK(move.GenerateRef(ref) == expected);
 }
 
-TEST_CASE_FIXTURE(ServoFixture, "Servo retains position following protection while braking") {
+TEST_CASE_FIXTURE(ServoFixture, "Servo finishes controlled braking despite actual position lag") {
     exchange(jointCommand(1));
     REQUIRE(move.GenerateRef(ref) == Result::NoError);
     exchange(jointCommand(2, .0005));
     REQUIRE(move.GenerateRef(ref) == Result::NoError);
     REQUIRE(move.Stop() == Result::NoError);
     hw.setFeedbackPosition(makeJntArray(.03, 0, 0));
-    CHECK(move.GenerateRef(ref) == Result::NotFollowPositionCmd);
+    Result rc = move.GenerateRef(ref);
+    REQUIRE(rc == Result::NoError);
+    for (int i = 0; i < 2000 && rc == Result::NoError; ++i) rc = move.GenerateRef(ref);
+    CHECK(rc == Result::PlanFinished);
+    CHECK(move.GetDiagnostics().fault == Result::NoError);
+    CHECK(move.GetDiagnostics().desired_velocity.data.norm() == 0);
+    CHECK(move.GetDiagnostics().desired_acceleration.data.norm() == 0);
+}
+
+TEST_CASE(
+    "Servo executor permits position lag through output and braking but retains hard faults") {
+    class TrackingHardware : public FakeHardware {
+       public:
+        TrackingHardware() : FakeHardware(makeJntArray(0, 0, 0)), output(makeJntArray(0, 0, 0)) {}
+        int quick_stops{0}, writes{0};
+        bool stale{false};
+        rocos::JntArray output;
+        void SetPosition(const rocos::JntArray& q) override {
+            output = q;
+            ++writes;
+        }
+        void RequestSafetyStop() noexcept override { ++quick_stops; }
+        bool SafetyStopRequested() const override { return quick_stops > 0; }
+        Result CheckFeedbackFreshness(uint64_t) const override {
+            return stale ? Result::LostHeartbeat : Result::NoError;
+        }
+        rocos::OutputSnapshot GetOutputSnapshot() const override {
+            rocos::OutputSnapshot snapshot;
+            snapshot.position = output;
+            snapshot.mode = 8;
+            return snapshot;
+        }
+    } hw;
+    FakeModel model;
+    const auto port = freePort();
+    rocos::MoveServo move(&hw, &model, port);
+    REQUIRE(move.Reset() == Result::NoError);
+    UdpClient client;
+    client.session = move.GetSession();
+    rocos::PositionController controller;
+    REQUIRE(controller.SetHardware(&hw) == Result::NoError);
+    REQUIRE(controller.SetModel(&model) == Result::NoError);
+    rocos::Executor executor(&move, &controller, &hw);
+    client.send(port, jointCommand(1));
+    awaitCommand(move, 1);
+    REQUIRE(executor.Update() == Result::NoError);
+    client.send(port, jointCommand(2, .0005));
+    awaitCommand(move, 2);
+    REQUIRE(executor.Update() == Result::NoError);
+    hw.setFeedbackPosition(makeJntArray(.5, 0, 0));
+    const int writes = hw.writes;
+    SUBCASE("position lag allows output and a complete controlled stop") {
+        hw.feedback_velocity0 = .5;
+        REQUIRE(executor.Update() == Result::NoError);
+        CHECK(hw.writes == writes + 1);
+        CHECK_FALSE(move.GetDiagnostics().stopping);
+        CHECK(hw.quick_stops == 0);
+        REQUIRE(move.Stop() == Result::NoError);
+        Result rc = Result::NoError;
+        for (int i = 0; i < 2000 && rc == Result::NoError; ++i) rc = executor.Update();
+        CHECK(rc == Result::PlanFinished);
+        CHECK(hw.quick_stops == 0);
+        CHECK(move.GetDiagnostics().fault == Result::NoError);
+        CHECK(move.GetPublishedState().output_valid);
+    }
+    SUBCASE("actual position limit remains a hard fault") {
+        hw.setFeedbackPosition(makeJntArray(11, 0, 0));
+        CHECK(executor.Update() == Result::PosLimit);
+        CHECK(hw.writes == writes);
+        CHECK(hw.quick_stops > 0);
+    }
+    SUBCASE("actual absolute speed remains a hard fault") {
+        hw.feedback_velocity0 = 2;
+        CHECK(executor.Update() == Result::SpeedLimit);
+        CHECK(hw.writes == writes);
+        CHECK(hw.quick_stops > 0);
+    }
+    SUBCASE("stale feedback remains a hard fault") {
+        hw.stale = true;
+        CHECK(executor.Update() == Result::LostHeartbeat);
+        CHECK(hw.writes == writes);
+        CHECK(hw.quick_stops > 0);
+    }
 }
 
 TEST_CASE(

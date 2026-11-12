@@ -18,7 +18,7 @@ class ServoSignalProcessor {
                  const JntArray& actual, double dt, const ServoSettings& settings,
                  const Frame& tool = Frame::Identity());
     Result Step(const Reference& target, bool stopping, JntArray& output);
-    // 实际反馈范围/新鲜度由调用方验证；此处比较同周期的参考与反馈。
+    // 实际反馈范围/新鲜度由调用方验证；此处保留维度及数值有效性检查。
     Result CheckFeedback(const JntArray& actual, const JntArray& velocity) const;
     const JntArray& Position() const;
     const JntArray& Velocity() const;

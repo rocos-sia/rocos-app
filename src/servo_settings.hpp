@@ -12,7 +12,7 @@ struct JointDerivativeLimits {
     double deceleration{0};
     double velocity_offset{0};
     double torque_rate{200};
-    double following_error{0};  // 0: 额定速度 × 20 个控制周期
+    double following_error{0};  // 笛卡尔参考偏离/诊断阈值；0: 额定速度 × 20 个周期
 };
 
 struct ServoJointState {

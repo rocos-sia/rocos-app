@@ -165,7 +165,7 @@ Result PositionController::ValidatePositionCommand(const JntArray& q_cmd) {
     FeedbackSnapshot sample;
     auto feedback_result=hardware_->ReadFeedbackSnapshot(sample);
     if (feedback_result==Result::NoError)
-        feedback_result=ValidateFeedback(*model_,*hardware_,sample,has_last_cmd_?&q_last_cmd_:nullptr);
+        feedback_result = ValidateFeedback(*model_, *hardware_, sample);
     if (feedback_result!=Result::NoError) { hardware_->RequestSafetyStop(); return feedback_result; }
     const auto& q_actual=sample.position;
     const double dt = static_cast<double>(hardware_->GetDt()) / 1'000'000.0;

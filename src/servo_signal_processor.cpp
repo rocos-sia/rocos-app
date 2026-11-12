@@ -24,10 +24,11 @@ struct ServoSignalProcessor::Impl {
 };
 
 namespace {
-// 与现有反馈保护一致：位置允许显式型号容差，否则取 20 个周期的额定行程。
-constexpr double kTrackingCycles = 20;
-double trackingTolerance(const JointDerivativeLimits& limits, double vmax, double dt) {
-    return limits.following_error > 0 ? limits.following_error : vmax * dt * kTrackingCycles;
+// 笛卡尔候选参考的偏离限值，不用于实际位置跟随保护。
+constexpr double kReferenceDeviationCycles = 20;
+double referenceDeviationTolerance(const JointDerivativeLimits& limits, double vmax, double dt) {
+    return limits.following_error > 0 ? limits.following_error
+                                      : vmax * dt * kReferenceDeviationCycles;
 }
 }
 
@@ -82,20 +83,6 @@ Result ServoSignalProcessor::CheckFeedback(const JntArray& actual,
         return Result::UnmatchedJointsNumber;
     if (!actual.data.allFinite() || !velocity.data.allFinite())
         return Result::ParameterNanOrInf;
-    for (unsigned int i = 0; i < actual.rows(); ++i) {
-        const double tolerance = trackingTolerance(s.limits[i], s.model->GetVelocityLimit()(i), s.dt);
-        if (std::abs(actual(i)-s.q(i)) > tolerance) {
-            emitLogEvent(LogEventType::ServoFeedbackPosition, LogModule::MoveServo,
-                         static_cast<int>(Result::NotFollowPositionCmd), i, actual(i), s.q(i), tolerance);
-            return Result::NotFollowPositionCmd;
-        }
-        const double velocity_tolerance = s.limits[i].acceleration * s.dt * kTrackingCycles;
-        if (std::abs(velocity(i)-s.v(i)) > velocity_tolerance) {
-            emitLogEvent(LogEventType::ServoFeedbackVelocity, LogModule::MoveServo,
-                         static_cast<int>(Result::OutRangeFeedback), i, velocity(i), s.v(i), velocity_tolerance);
-            return Result::OutRangeFeedback;
-        }
-    }
     return Result::NoError;
 }
 
@@ -195,7 +182,8 @@ Result ServoSignalProcessor::stepImpl(const Reference& target, bool stopping,
                              static_cast<int>(Result::IkTrack), i, goal(i), s.filtered(i), continuity);
                 return Result::IkTrack;
             }
-            const double deviation = trackingTolerance(s.limits[i], s.model->GetVelocityLimit()(i), s.dt);
+            const double deviation =
+                referenceDeviationTolerance(s.limits[i], s.model->GetVelocityLimit()(i), s.dt);
             if (std::abs(goal(i)-s.q(i)) > deviation + 1e-12) {
                 emitLogEvent(LogEventType::ServoReferenceDeviation, LogModule::MoveServo,
                              static_cast<int>(Result::MotionLimit), i, goal(i), s.q(i), deviation);

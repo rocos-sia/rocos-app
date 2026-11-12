@@ -78,7 +78,7 @@ struct Drive {
         double jerk = 150.0;           // 最大加加速度
         double deceleration = 0.0;     // 0: 使用 acc；必须按机器人核定
         double torque_rate = 200.0;   // Nm/s 或 N/s
-        double following_error = 0.0; // 0: 额定速度 × 20 个控制周期
+        double following_error = 0.0;  // 笛卡尔参考偏离/诊断阈值；0: 额定速度 × 20 个周期
         double velocity_offset = 0.0; // 位置相关速度包络的偏置
         double effort = 30.0;          // 最大力矩/力
     } limit;

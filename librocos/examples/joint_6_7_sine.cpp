@@ -327,7 +327,7 @@ int main(int argc, char** argv) {
             std::cout << "J" << i + 1 << " amplitude +/- " << amplitudes[i] * 180 / joint_sine::kPi
                       << " deg, configured q range [" << l.lower << ", " << l.upper
                       << "], v/a/j " << l.velocity << '/' << l.acceleration << '/' << l.jerk
-                      << ", following tolerance " << l.following << " rad.\n";
+                      << ", position error diagnostic threshold " << l.following << " rad.\n";
             joint_sine::checkTrajectory(joint_parameters, l);
         }
         if (check_only) { std::cout << "Offline trajectory check passed.\n"; return 0; }
@@ -344,6 +344,7 @@ int main(int argc, char** argv) {
                          {"exported_servo_settings_yaml", config.servo_settings_yaml},
                          {"controller_info", info}, {"cycle_s", .001}, {"zero_tolerance_rad", kZeroTolerance}};
         metadata["joint_amplitudes_rad"] = amplitudes;
+        metadata["client_position_following_protection_enabled"] = false;
         metadata["controller_ip"] = host;
         metadata["trajectory_time_basis"] = "control_cycle";
         for (const auto& l : config.limits)
@@ -401,8 +402,7 @@ int main(int argc, char** argv) {
                         state.q_cmd[i] < l.lower || state.q_cmd[i] > l.upper ||
                         std::abs(state.dq[i]) > l.velocity ||
                         std::abs(state.dq_d[i]) > l.velocity + 1e-9 ||
-                        std::abs(state.ddq_d[i]) > l.acceleration + 1e-9 ||
-                        std::abs(state.q[i] - state.q_cmd[i]) > l.following)
+                        std::abs(state.ddq_d[i]) > l.acceleration + 1e-9)
                         throw std::runtime_error("Feedback/reference protection on J" + std::to_string(i + 1) +
                             ", q=" + std::to_string(state.q[i]) + ", dq=" + std::to_string(state.dq[i]) +
                             ", following_error=" + std::to_string(state.q[i] - state.q_cmd[i]) +

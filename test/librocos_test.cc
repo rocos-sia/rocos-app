@@ -77,6 +77,7 @@ class Peer {
     std::atomic<bool> oversize{false}, nonfinite{false}, stuck_stop{false}, reject_start{false};
     std::atomic<bool> stale_ack{false};
     std::atomic<std::int64_t> clock_offset_ns{0};
+    std::atomic<double> reported_position_lag{0};
     std::atomic<int> cycle_period_us{1000}, skip_cycle{0};
     bool peer_ready{false};
     sockaddr_in peer_address{};
@@ -337,6 +338,9 @@ class Peer {
             }
             if (!peer_ready || drop || state.cycle == static_cast<uint64_t>(skip_cycle.load())) continue;
             auto packet = state;
+            // 运动中报告位置滞后，起点及回到零位时保持精确反馈。
+            if (packet.applied_message_id && packet.q_cmd[2] != 0)
+                packet.q[2] -= reported_position_lag.load();
             packet.message_id = ++state.message_id;
             packet.errors[0] = fault != 0;
             if (wrong_session) packet.session_id[0] ^= 0x80;
@@ -802,6 +806,7 @@ TEST_CASE("J6 J7 sine example validates startup and records normal interrupted a
             peer.state.q.fill(0);
             peer.state.q_cmd = peer.state.q;
         }
+        peer.reported_position_lag = all_joints ? .1 : 0;
         const bool normal = std::string(name) == "normal" || all_joints;
         const auto result = run(name, std::string(name) == "interrupt", std::string(name) == "drop", false, false, all_joints);
         INFO(name);
@@ -817,6 +822,7 @@ TEST_CASE("J6 J7 sine example validates startup and records normal interrupted a
         std::ifstream metadata_file(result.second / "metadata.json");
         const auto metadata = Json::parse(metadata_file);
         CHECK(metadata.at("controller_ip") == "127.0.0.2");
+        CHECK_FALSE(metadata.at("client_position_following_protection_enabled").get<bool>());
         CHECK(metadata.at("trajectory_time_basis") == "control_cycle");
         CHECK(fs::file_size(result.second / "samples.csv") > 1000);
         std::ifstream csv(result.second / "samples.csv");
@@ -826,6 +832,7 @@ TEST_CASE("J6 J7 sine example validates startup and records normal interrupted a
         double first_cycle = 0;
         double largest_clock_difference = 0;
         double first_sample_ns = 0;
+        double peak_position_error = 0;
         joint_sine::Parameters trajectory;
         trajectory.duration = 10;
         while (std::getline(csv, line)) {
@@ -834,6 +841,7 @@ TEST_CASE("J6 J7 sine example validates startup and records normal interrupted a
             std::string cell;
             while (std::getline(stream, cell, ',')) values.push_back(std::stod(cell));
             REQUIRE(values.size() == 65);
+            peak_position_error = std::max(peak_position_error, std::abs(values[18] - values[32]));
             if (rows == 0) { first_cycle = values[2]; first_sample_ns = values[3]; }
             CHECK(std::abs(values[0] - (values[2] - first_cycle) * .001) < 1e-12);
             largest_clock_difference = std::max(largest_clock_difference,
@@ -855,6 +863,8 @@ TEST_CASE("J6 J7 sine example validates startup and records normal interrupted a
         }
         CHECK(rows == outcome.at("samples").get<std::size_t>());
         CHECK(largest_clock_difference > 1e-6);
+        if (all_joints) CHECK(peak_position_error > .06);
+        peer.reported_position_lag = 0;
         std::lock_guard<std::mutex> lock(peer.mutex);
         if (all_joints) {
             for (std::size_t i = 0; i < 7; ++i) CHECK(std::abs(peer.state.q[i]) < 1e-12);

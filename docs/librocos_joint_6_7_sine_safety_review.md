@@ -1,5 +1,17 @@
 # 关节零位正弦示例与真机安全检查
 
+## 2026-11-12：移除实际位置和速度跟随误差停止条件
+
+当前源码移除四处实际位置与参考位置偏差触发的保护：正常伺服处理器、制动期间反馈校验、位置控制器下发前校验、客户端正弦示例。共享 `ValidateFeedback` 只检查实际位置范围、实际绝对速度、反馈维度/有限值和新鲜度；普通 MoveJ/MoveL 等经位置控制器下发的运动同样不再因实际位置跟随误差返回 `NotFollowPositionCmd (-2203)`。
+
+正常伺服运行的实际速度与参考速度偏差保护也已移除，不再因 `abs(actual_velocity-reference_velocity)` 超过原 `acceleration × dt × 20` 阈值触发 `OutRangeFeedback (-2206)`。指令位置/速度/加速度/jerk、实际绝对速度、制动可行性、起点连续性、通信保护与结束到位检查保持生效。制动期间仍检查实际绝对位置/速度及反馈有效性。位置和速度跟随偏差本身不会再停止运动，参考超调问题需要独立处理。
+
+`following_error` 字段继续兼容读取，用于笛卡尔候选参考与受限参考之间的偏离检查及离线诊断统计；它不再是实际位置跟随停止阈值。CSV 继续记录实际、原始目标、处理后参考和最终输出。metadata 的 `client_position_following_protection_enabled=false` 仅说明客户端示例，不能据此推断远端 App 是否已更新。`NotFollowPositionCmd`、`OutRangeFeedback` 枚举和历史日志解释保留。
+
+下文早期验证与真机记录中的位置跟随保护描述属于修改前行为。此修改需分别重新编译客户端和服务端，源码更新不会自动改变运行中的控制器。
+
+本次内测按暂存区建立隔离源码副本，单核编译 App、位置控制器、伺服和 SDK 测试通过。`position_controller_test`、`servo_robot_test`、`librocos_robot_test`、`librocos_test` 四组 CTest 全部通过。伺服套件 53 项通过，另行执行的两项既有限速收敛回归仍失败，分别为 `Servo regression small targets converge without self-excited motion` 和 `Servo adaptive tracking settles repeated small targets and reversals`。客户端回归注入 0.1 rad 反馈滞后，验证位置偏差超过 0.06 rad 诊断阈值时仍完成示例。测试使用离线主站及本地模拟通信端，实时调度请求因权限受限回退为普通调度，真机表现待后续验证。
+
 ## 远程 IPv4 接入
 
 示例增加 `--ip <控制器IPv4>`，默认地址为 `127.0.0.1`。App 的 RCI start 支持远程 IPv4，UDP 监听 `0.0.0.0`。启用 RCI 仍走原有控制权流程，启动仍要求 STOPPED、入口已开启与独占会话。会话关联发起 HTTP 请求的源 IPv4，首个有效正序号运动包进一步绑定 UDP 源端口。查询、旧会话、重复包、乱序包与其他来源继续受现有检查约束。
@@ -78,7 +90,7 @@ sudo env PYTHONNOUSERSITE=1 python3 librocos/examples/analyze_joint_6_7_sine.py 
 | 首点容差 | MoveServo 对首个原始目标与实际配置比较，超限报 `HomePositionError`，进入故障停止 | 示例再增加 J6/J7 零位检查，HTTP 预检与首个 UDP 回调均检查 |
 | 目标与实际位置边界 | `ValidateJointCommand`、`ValidateFeedback` 与 Model 位置限制 | 示例取生效硬件配置与 URDF 边界交集，并检查全轴反馈及最终位置输出 |
 | 速度、加速度、jerk | Model 逐周期限速、候选停止轨迹检查、信号处理末端再验证 | J=10000，轨迹生成前验证包含启动包络的导数上界 |
-| 实际跟随 | 位置误差及速度误差检查，故障并入停止流程 | 当前默认位置容差为 V×dt×20，V=3、dt=1 ms 时为 0.06 rad，约 3.44°。型号容差需核定 |
+| 实际跟随 | 位置和速度跟随偏差继续记录，不再触发停止 | 实际绝对位置/速度检查继续生效；V×dt×20 继续作为默认位置偏差诊断阈值 |
 | 反馈新鲜度 | 硬件源时间检查，默认 20 个硬件周期 | 需结合真实主站时间戳发布方式与时钟行为验证 |
 | UDP 通信 | 会话 ID、发送端、递增序号、缺失和接收质量保护 | SDK 另外检测陈旧反馈、回调超时和最终目标提交确认 |
 | 控制线程阻塞 | 有界主站等待与独立监督线程，超时写入安全停止请求 | 配置阈值对应触发条件，物理停稳时间取决于调度、总线和驱动 |

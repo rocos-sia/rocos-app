@@ -697,7 +697,7 @@ TEST_CASE("PositionController - 完整调用链") {
     }
 }
 
-TEST_CASE("Position feedback limits and following error reject output") {
+TEST_CASE("Position feedback bounds velocity and freshness still reject output") {
     FakeHardware hw; FakeModel model;
     hw.fake_position_=rocos::JntArray(3); model.SetLimits(3,-1,1,2);
     rocos::PositionController ctrl;
@@ -709,10 +709,6 @@ TEST_CASE("Position feedback limits and following error reject output") {
         hw.fake_position_(0)=2;
         CHECK(ctrl.UpdateCmd(q)==rocos::Result::PosLimit);
     }
-    SUBCASE("actual position lags previous command beyond tolerance") {
-        hw.fake_position_(0)=.1;
-        CHECK(ctrl.UpdateCmd(q)==rocos::Result::NotFollowPositionCmd);
-    }
     SUBCASE("actual velocity outside model bounds") {
         hw.actual_speed=3;
         CHECK(ctrl.UpdateCmd(q)==rocos::Result::SpeedLimit);
@@ -723,4 +719,24 @@ TEST_CASE("Position feedback limits and following error reject output") {
     }
     CHECK(hw.set_position_count_==1);
     CHECK(hw.safety_stops==1);
+}
+
+TEST_CASE("Position lag permits output while command differential velocity remains bounded") {
+    FakeHardware hw;
+    FakeModel model;
+    hw.fake_position_ = rocos::JntArray(3);
+    model.SetLimits(3, -1, 1, 2);
+    rocos::PositionController ctrl;
+    REQUIRE(ctrl.SetHardware(&hw) == rocos::Result::NoError);
+    REQUIRE(ctrl.SetModel(&model) == rocos::Result::NoError);
+    rocos::JntArray q(3);
+    REQUIRE(ctrl.UpdateCmd(q) == rocos::Result::NoError);
+    hw.fake_position_(0) = .5;
+    q(0) = .001;
+    CHECK(ctrl.UpdateCmd(q) == rocos::Result::NoError);
+    CHECK(hw.set_position_count_ == 2);
+    CHECK(hw.safety_stops == 0);
+    q(0) = .004;
+    CHECK(ctrl.UpdateCmd(q) == rocos::Result::SpeedLimit);
+    CHECK(hw.set_position_count_ == 2);
 }
