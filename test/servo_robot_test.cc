@@ -5,6 +5,7 @@
 #include <unistd.h>
 
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -196,6 +197,114 @@ TEST_CASE("Hardware position counts round without bias and reject partial batche
     CHECK_THROWS_AS(hardware.SetPosition(invalid), std::out_of_range);
     CHECK(offline.master.getSlaveOutputVarValue<int32_t>(0, 2) == before0);
     CHECK(offline.master.getSlaveOutputVarValue<int32_t>(1, 2) == before1);
+}
+
+TEST_CASE("Hardware command position reads output PDOs in model order and user units") {
+    bool bind = false;
+    SUBCASE("Hardware order") {}
+    SUBCASE("Model binding order") { bind = true; }
+    OfflineMaster offline;
+    auto config = rocos::Hardware::LoadConfigFromYAML(offline.config().hardware_config);
+    for (auto& drive : config.drives) {
+        drive.transform.pos_per_unit = 156455.678;
+        drive.transform.ratio = drive.id ? -0.5 : 1.0;
+        drive.transform.offset_pos_cnt = drive.id ? -123 : 456;
+    }
+    rocos::Hardware hardware(config, offline.id);
+    if (bind) REQUIRE(hardware.SetJointBinding({0, 1}) == Result::NoError);
+    CHECK(hardware.GetCmdPosition().data.isApprox(hardware.GetPosition().data, 1e-12));
+
+    // 直接修改输出区；软件输出快照为空，验证读回来源确实是 Target Position。
+    REQUIRE(hardware.GetOutputSnapshot().position.rows() == 0);
+    offline.master.setSlaveOutputVarValue<int32_t>(0, 2, 10456);
+    offline.master.setSlaveOutputVarValue<int32_t>(1, 2, -20123);
+    const auto actual = hardware.GetPosition();
+    const auto command = hardware.GetCmdPosition();
+    REQUIRE(command.rows() == config.drives.size());
+    for (unsigned int i = 0; i < command.rows(); ++i) {
+        const auto& drive = bind ? *hardware.findDriveById(i) : config.drives[i];
+        const int32_t raw = drive.id ? -20123 : 10456;
+        const double expected = (raw - drive.transform.offset_pos_cnt) /
+                                drive.transform.pos_per_unit / drive.transform.ratio;
+        CHECK(command(i) == doctest::Approx(expected));
+    }
+    CHECK_FALSE(command.data.isApprox(actual.data, 1e-12));
+    hardware.SetPosition(command);
+    CHECK(offline.master.getSlaveOutputVarValue<int32_t>(0, 2) == 10456);
+    CHECK(offline.master.getSlaveOutputVarValue<int32_t>(1, 2) == -20123);
+}
+
+TEST_CASE("Hardware command position rejects a missing Target Position mapping") {
+    OfflineMaster offline;
+    auto config = rocos::Hardware::LoadConfigFromYAML(offline.config().hardware_config);
+    config.drives[0].outputs.target_position.clear();
+    rocos::Hardware hardware(config, offline.id);
+    CHECK_THROWS_AS(hardware.GetCmdPosition(), std::runtime_error);
+}
+
+TEST_CASE("MoveJ completion holds the last submitted position despite feedback lag") {
+    double direction = 1.0;
+    SUBCASE("Positive target") {}
+    SUBCASE("Negative target") { direction = -1.0; }
+    OfflineMaster offline;
+    rocos::Robot robot(offline.config());
+    REQUIRE(robot.SetEnabled() == Result::NoError);
+    REQUIRE(robot.GetStateString() == "STOPPED");
+
+    const auto actual = robot.hardware->GetPosition();
+    auto goal = actual;
+    // 超过单周期速度行程，但仍在允许的跟随误差内；反馈保持不动以复现实机滞后。
+    // 目标包含不足一个编码器计数的尾数，保持值应来自实际 PDO 码值。
+    goal(0) += direction * .004001;
+    auto held_goal = goal;
+    held_goal(0) = actual(0) + direction * .004;
+    REQUIRE(robot.MoveJ(goal, .05, 1.0, 10.0) == Result::NoError);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (robot.GetStateString() == "RUNNING" &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    REQUIRE(robot.GetStateString() == "STOPPED");
+    // 检查后续保持周期，避免只捕获到 STOPPED 后紧接着进入 ERROR 的短暂窗口。
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    CHECK(robot.GetStateString() == "STOPPED");
+    CHECK_FALSE(robot.hardware->SafetyStopRequested());
+    const auto output = robot.hardware->GetOutputSnapshot();
+    REQUIRE(output.position.rows() == goal.rows());
+    CHECK(output.mode == 8);
+    CHECK(output.position.data.isApprox(held_goal.data, 1e-10));
+    CHECK(robot.hardware->GetCmdPosition().data.isApprox(held_goal.data, 1e-10));
+    CHECK(robot.hardware->GetPosition().data.isApprox(actual.data, 1e-10));
+    CHECK(offline.master.getSlaveOutputVarValue<int32_t>(0, 2) ==
+          1000 + static_cast<int32_t>(std::llround(direction * .004 * 200000)));
+}
+
+TEST_CASE("CSP enable holds Target Position while disabled state follows feedback") {
+    OfflineMaster offline;
+    rocos::Robot robot(offline.config());
+    auto target = robot.hardware->GetPosition();
+    target(0) = .002;
+    robot.hardware->SetPosition(target);
+
+    REQUIRE(robot.SetEnabled() == Result::NoError);
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    REQUIRE(robot.GetStateString() == "STOPPED");
+    CHECK(robot.hardware->GetCmdPosition()(0) == doctest::Approx(.002));
+
+    REQUIRE(robot.SetDisabled() == Result::NoError);
+    REQUIRE(robot.GetStateString() == "IDLE");
+    // 下使能后反馈发生变化，查询应读取新反馈，PDO 目标仍保留原值。
+    offline.master.setSlaveInputVarValue<int32_t>(0, 1, 1200);
+    const auto state = robot.GetRobotStateSnapshot();
+    CHECK_FALSE(state.is_enabled);
+    REQUIRE(state.joints.size() == 2);
+    CHECK(state.joints[0].position == doctest::Approx(.001));
+    CHECK(robot.hardware->GetCmdPosition()(0) == doctest::Approx(.002));
+
+    REQUIRE(robot.SetEnabled() == Result::NoError);
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    CHECK(robot.GetStateString() == "STOPPED");
+    CHECK(robot.hardware->GetCmdPosition()(0) == doctest::Approx(.002));
 }
 
 TEST_CASE("librocos actual HTTP and UDP joint servo with offline master") {

@@ -60,6 +60,8 @@ class HardwareInterface : public DriveInterface,
   }
   virtual Result CheckFeedbackFreshness(uint64_t) const { return Result::NoError; }
   virtual OutputSnapshot GetOutputSnapshot() const { return {}; }
+  /// @brief 已下发的关节位置目标，按 model index 排列；真实硬件从输出 PDO 读回。
+  virtual JntArray GetCmdPosition() const { return GetOutputSnapshot().position; }
   virtual void RequestSafetyStop() noexcept { try { SetDisabled(); } catch (...) {} }
   virtual bool SafetyStopRequested() const { return false; }
 

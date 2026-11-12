@@ -397,6 +397,21 @@ JntArray Hardware::GetPosition() {
     return q;
 }
 
+JntArray Hardware::GetCmdPosition() const {
+    std::lock_guard<std::mutex> lock(output_mutex_);
+    JntArray q(ModelJointCount());
+    for (size_t i = 0; i < ModelJointCount(); ++i) {
+        const auto id = DriveIdByModelIndex(i);
+        const auto idx = getDriveIdx(id);
+        if (idx < 0 || !drive_pdo_cache_[static_cast<size_t>(idx)].target_position) {
+            throw std::runtime_error("Missing Target Position PDO for drive " + std::to_string(id));
+        }
+        const auto index = static_cast<size_t>(idx);
+        q(i) = cntToUnit(config_.drives[index], drive_pdo_cache_[index].target_position.read());
+    }
+    return q;
+}
+
 JntArray Hardware::GetVelocity() {
     JntArray q_dot(ModelJointCount());
     for (size_t i = 0; i < ModelJointCount(); ++i) {

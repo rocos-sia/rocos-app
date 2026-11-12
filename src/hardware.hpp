@@ -206,6 +206,8 @@ public:
 
     // ========== DriveInterface 接口实现 ==========
     JntArray GetPosition() override;
+    /// @brief 读取 Target Position 输出 PDO，换算为用户单位；缺少映射时抛出异常。
+    JntArray GetCmdPosition() const override;
     JntArray GetVelocity() override;
     JntArray GetTorque() override;
     JntArray GetLoadTorque() override;

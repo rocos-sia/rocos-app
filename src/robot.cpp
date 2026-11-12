@@ -421,13 +421,15 @@ namespace rocos {
 
       {
         std::lock_guard<std::mutex> lock(mtx_);
-
-        auto hold = hardware->GetPosition();
+        // CSP 已使能时保持 Target Position；下使能或力矩模式使用反馈位置。
+        const bool hold_command = IsEnabled() && hardware->GetOutputSnapshot().mode == 8;
+        auto hold = hold_command ? hardware->GetCmdPosition() : hardware->GetPosition();
+        if (hold.rows() != static_cast<unsigned int>(model->GetJointNum()) ||
+            !hold.data.allFinite()) {
+            throw std::runtime_error("Invalid position target when entering STOPPED");
+        }
         if (auto* servo = dynamic_cast<MoveServo*>(motion.get())) {
             last_servo_status_ = servo->GetStatus();
-            const auto diagnostic = servo->GetDiagnostics();
-            if (diagnostic.desired_position.rows() == hold.rows())
-                hold = diagnostic.desired_position;
         }
         motion = std::make_unique<MoveHold>(hold);
         executor->SwitchMotion(motion.get());
