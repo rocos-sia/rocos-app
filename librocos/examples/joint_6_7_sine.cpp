@@ -164,9 +164,10 @@ Json checkConnectedModel(const Configuration& config, const std::string& host) {
 
 void checkStart(const librocos::RobotState& state, const Configuration& config,
                 const std::array<double, kDof>& amplitudes) {
-    if (state.dof != kDof || !state.enabled || state.robot_state != "STOPPED" ||
+    if (state.dof != kDof || !state.enabled ||
+        (state.robot_state != "STOPPED" && state.robot_state != "RCI") ||
         state.work_mode != "position")
-        throw std::runtime_error("Prepare enabled seven-axis position mode in STOPPED");
+        throw std::runtime_error("Prepare enabled seven-axis position mode in STOPPED or RCI");
     for (std::size_t i = 0; i < kDof; ++i) {
         const auto& limit = config.limits[i];
         if (!std::isfinite(state.q[i]) || state.q[i] < limit.lower || state.q[i] > limit.upper ||
@@ -447,7 +448,7 @@ int main(int argc, char** argv) {
                     {"q", s.q}, {"dq", s.dq}, {"q_d", s.q_d}, {"q_cmd", s.q_cmd},
                     {"output_valid", s.output_valid}};
             }
-            if (status.control_active || status.robot_state != "STOPPED" || !status.last_control ||
+            if (status.control_active || status.robot_state != "RCI" || !status.last_control ||
                 status.last_control->fault_code) outcome["completed"] = false;
         } catch (const std::exception& error) {
             outcome["status_error"] = error.what(); outcome["completed"] = false;

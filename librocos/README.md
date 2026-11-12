@@ -37,11 +37,11 @@ robot.control([&](const librocos::RobotState& state, librocos::Duration period) 
 robot.disableRci();
 ```
 
-运行运动程序前，准备好控制器及硬件或仿真环境，将机器人使能至 `STOPPED`，工作模式设为 `position`。`enableRci()` 在入口已开启时直接返回，支持上位机先开启 RCI。程序开启入口时，库自动申请 HTTP 控制权、开启 RCI 并释放 HTTP 租约，业务程序无需管理令牌。其他持有者占用 HTTP 控制权时，错误会传回调用者。
+运行运动程序前，准备好控制器及硬件或仿真环境，将机器人使能至 `STOPPED`，工作模式设为 `position`。`enableRci()` 在入口已开启时直接返回，支持上位机先开启 RCI，此时示例也接受已使能的 `RCI` 待命状态。程序开启入口时，库自动申请 HTTP 控制权、开启 RCI 并释放 HTTP 租约，业务程序无需管理令牌。其他持有者占用 HTTP 控制权时，错误会传回调用者。
 
 `control()` 每次建立一个独占 RCI 会话，校验协议版本、会话 ID、UDP 端点及报文长度。SDK 接受控制器的 IPv4 或解析为 IPv4 的主机名。App UDP 监听 `0.0.0.0`，RCI 会话关联发起 HTTP 请求的源 IPv4，首个有效运动包再绑定 UDP 源端口。部署时让 App 的 HTTP 监听地址可从客户端访问，并放行配置的 HTTP TCP 端口及伺服 UDP 端口。客户端通过自身出站 UDP socket 接收回包。
 
-UDP v2 字段与会话 ID 格式保持兼容，但本次状态发送节拍需要 App 与 librocos 配套升级；新 SDK 不能用于仍仅按运动包回显状态的旧 App，当前没有节拍能力自动协商。RCI start 继续要求入口已开启、STOPPED 和独占会话。SDK 使用本地接收计时及已应用指令的发送时间验证时效，服务端采样时间继续用于单调性检查和回调周期计算。两台电脑的单调时钟允许有不同起点。
+UDP v2 字段与会话 ID 格式保持兼容，但本次状态发送节拍需要 App 与 librocos 配套升级；新 SDK 不能用于仍仅按运动包回显状态的旧 App，当前没有节拍能力自动协商。RCI start 要求入口已开启、处于独立 `RCI` 待命状态且没有活动会话。正常伺服结束返回 `RCI`，`disableRci()` 完成后返回 `STOPPED`；故障进入 `ERROR_STATE` 并自动关闭 RCI。SDK 使用本地接收计时及已应用指令的发送时间验证时效，服务端采样时间继续用于单调性检查和回调周期计算。两台电脑的单调时钟允许有不同起点。
 
 ## 周期与状态语义
 

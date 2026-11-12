@@ -75,6 +75,7 @@ class Robot {
   struct RobotStateSnapshot {
     // --- FSM 状态 ---
     std::string state_string;
+    nlohmann::json rci;
     bool is_enabled{false};
     bool is_running{false};
     bool control_active{false};
@@ -450,7 +451,9 @@ class Robot {
 
   friend class LuaScriptEngine;
   std::atomic<bool> script_active_{false};
-  std::atomic<bool> rci_enabled_{false}, rci_closing_{false}, rci_active_{false};
+  std::atomic<bool> rci_enabled_{false}; // FSM 转换时发布的模式缓存
+  bool rci_closing_{false}, disable_after_stop_{false}; // FSM 锁保护
+  std::shared_ptr<ServoSession> rci_session_; // HTTP 租约之外的 RCI 会话归属
   Result StartServo(uint16_t port, std::shared_ptr<ServoSession> session);
   nlohmann::json last_servo_status_; // FSM 锁保护，会话销毁后仍可查询终态。
   void FinishRciControl();  // 由持有 FSM 锁的停止/故障回调调用
@@ -532,6 +535,9 @@ class Robot {
   void on_fsm_error();
 
   void on_fsm_stopped();
+  void on_fsm_rci();
+  bool ResumeRciAfterStop() const; // FSM guard，在 FSM 锁下调用
+  bool DisableAfterStop() const { return disable_after_stop_; }
 
 
   //////////测试用///////////

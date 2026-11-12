@@ -166,6 +166,7 @@ class Peer {
                 return;
             }
             rci_enabled = true;
+            robot_state = "RCI";
             reply(response, status());
         });
         http.Post("/api/robot/rci/disable", [&](const auto& request, auto& response) {
@@ -177,8 +178,10 @@ class Peer {
             if (active) {
                 closing = true;
                 requestStop();
-            } else
+            } else {
                 rci_enabled = false;
+                robot_state = "STOPPED";
+            }
             reply(response, status());
         });
         http.Post("/api/robot/rci/start", [&](const auto& request, auto& response) {
@@ -285,8 +288,8 @@ class Peer {
         if (robot_state == "STOPPING" && !stuck_stop &&
             Clock::now() - stopping_at >= std::chrono::milliseconds(3)) {
             active = false;
-            robot_state = fault ? "ERROR_STATE" : "STOPPED";
-            if (closing) {
+            robot_state = fault ? "ERROR_STATE" : closing ? "STOPPED" : "RCI";
+            if (closing || fault) {
                 rci_enabled = false;
                 closing = false;
             }
@@ -402,7 +405,7 @@ TEST_CASE(
         });
         const auto status = robot.rciStatus();
         CHECK_FALSE(status.control_active);
-        CHECK(status.robot_state == "STOPPED");
+        CHECK(status.robot_state == "RCI");
         REQUIRE(status.last_control);
         CHECK(status.last_control->applied_message_id > 0);
         CHECK(samples == 60);
@@ -808,7 +811,7 @@ TEST_CASE("J6 J7 sine example validates startup and records normal interrupted a
         const auto outcome = Json::parse(outcome_file);
         CHECK(outcome.at("samples").get<int>() > 10);
         CHECK_FALSE(outcome.at("writer_failed").get<bool>());
-        CHECK(outcome.at("robot_state") == "STOPPED");
+        CHECK(outcome.at("robot_state") == "RCI");
         CHECK_FALSE(outcome.at("control_active").get<bool>());
         CHECK(outcome.at("completed").get<bool>() == normal);
         std::ifstream metadata_file(result.second / "metadata.json");

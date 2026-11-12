@@ -734,10 +734,6 @@ void RobotHttpServer::handleControlTakeover(const httplib::Request& req,
 
     std::lock_guard<std::mutex> lock(control_mutex_);
     auto command_lock = robot_ ? robot_->LockToolState() : std::unique_lock<std::recursive_mutex>{};
-    if (robot_ && robot_->IsRciEnabled()) {
-        sendJson(res, false, resultCode(Result::ConflictTaskRunning), "Disable RCI before taking control");
-        return;
-    }
     if (!current_token_.empty()) {
         log_ptr_->warn("Control taken over: previous owner {}@{}:{} forcibly evicted by {}@{}:{}",
                        current_owner_name_, current_owner_ip_, current_owner_port_,
@@ -760,6 +756,8 @@ void RobotHttpServer::handleControlTakeover(const httplib::Request& req,
     data["token"] = current_token_;
     data["client_id"] = current_owner_client_id_;
     data["client_id_auto"] = client_id_auto_generated;
+    // 命令锁覆盖租约交接和退出请求，浏览器中断也不会留下旧 RCI 会话。
+    if (robot_ && robot_->IsRciEnabled()) robot_->DisableRci();
     sendJson(res, true, 0, "control taken over", data);
 }
 
@@ -910,7 +908,7 @@ void RobotHttpServer::handleGetRobotState(const httplib::Request& req, httplib::
 
     nlohmann::json data;
     data["robot_state"] = snap.state_string;
-    if (robot_) data["rci"] = robot_->GetRciStatus();
+    data["rci"] = snap.rci;
     data["is_enabled"] = snap.is_enabled;
     data["is_running"] = snap.is_running;
     data["control_active"] = snap.control_active;

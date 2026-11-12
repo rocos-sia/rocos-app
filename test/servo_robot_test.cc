@@ -351,7 +351,7 @@ TEST_CASE("librocos actual HTTP and UDP joint servo with offline master") {
             return command;
         });
         const auto status = client.rciStatus();
-        REQUIRE(status.robot_state == "STOPPED");
+        REQUIRE(status.robot_state == "RCI");
         REQUIRE_FALSE(status.control_active);
         REQUIRE(status.last_control);
         CHECK(status.last_control->fault_code == 0);
@@ -559,7 +559,7 @@ TEST_CASE_FIXTURE(
     CHECK(post("/api/robot/rci/enable", Json::object())["success"] == false);
     credentials = owner;
     REQUIRE(post("/api/robot/rci/enable", Json::object())["success"] == true);
-    CHECK(robot.GetStateString() == "STOPPED");
+    CHECK(robot.GetStateString() == "RCI");
     CHECK(robot.GetRciStatus()["control_active"] == false);
     CHECK(robot.MoveJ(robot.hardware->GetPosition()) ==
           Result::ConflictTaskRunning);
@@ -574,7 +574,6 @@ TEST_CASE_FIXTURE(
     CHECK(offline.master.getSlaveOutputVarValue<int32_t>(0, 2) == target);
     CHECK(post("/api/robot/movej", {{"q", {0.0, 0.0}}})["success"] == false);
     CHECK(post("/api/script/run", Json::object())["success"] == false);
-    CHECK(post("/api/control/takeover", Json::object())["success"] == false);
     CHECK(post("/api/robot/rci/start", {{"port", 0}})["code"] == 1001);
     CHECK(post("/api/robot/rci/start", {{"mode", "torque"}})["code"] == 1001);
     CHECK(post("/api/robot/rci/disable", Json::object())["success"] == true);
@@ -616,14 +615,14 @@ TEST_CASE_FIXTURE(Fixture,
     CHECK(robot.GetStateString() == "SERVOING");
     credentials.clear();
     REQUIRE(post("/api/robot/rci/stop", Json::object())["success"] == true);
-    REQUIRE(awaitState("STOPPED"));
+    REQUIRE(awaitState("RCI"));
     CHECK_FALSE(session->Active());
     CHECK(robot.IsRciEnabled());
     const auto restarted = post("/api/robot/rci/start", {{"port", port}});
     REQUIRE(restarted["success"] == true);
     CHECK(restarted["data"]["session_id"] != started["data"]["session_id"]);
     REQUIRE(post("/api/robot/rci/stop", Json::object())["success"] == true);
-    REQUIRE(awaitState("STOPPED"));
+    REQUIRE(awaitState("RCI"));
 }
 
 TEST_CASE_FIXTURE(Fixture, "RCI remote IPv4 session restricts UDP origin and endpoint") {
@@ -672,7 +671,7 @@ TEST_CASE_FIXTURE(Fixture, "RCI remote IPv4 session restricts UDP origin and end
     }
     CHECK(state.received_message_id == 1);
     REQUIRE(robot.StopRciControl() == Result::NoError);
-    REQUIRE(awaitState("STOPPED"));
+    REQUIRE(awaitState("RCI"));
     CHECK_FALSE(session->Active());
     const auto unsupported = rocos::RobotHttpServerTestAccess::startFrom(server, "2001:db8::1", port);
     CHECK(unsupported["code"] == 1001);
@@ -708,9 +707,9 @@ TEST_CASE_FIXTURE(
     CHECK(robot.StartRciControl(session, port) == Result::ServoBindFail);
     CHECK_FALSE(session);
     CHECK(robot.GetStateString() == "ERROR_STATE");
-    CHECK(robot.IsRciEnabled());
+    CHECK_FALSE(robot.IsRciEnabled());
     CHECK(robot.GetRciStatus()["control_active"] == false);
-    CHECK(robot.StartRciControl(session, port) == Result::ConflictTaskRunning);
+    CHECK(robot.StartRciControl(session, port) == Result::ServoNotInitialized);
     CHECK(robot.DisableRci() == Result::NoError);
 }
 
@@ -731,7 +730,7 @@ TEST_CASE_FIXTURE(Fixture, "Concurrent RCI programs receive only one session") {
           (rb == Result::ConflictTaskRunning));
     CHECK(bool(a) != bool(b));
     REQUIRE(robot.StopRciControl() == Result::NoError);
-    REQUIRE(awaitState("STOPPED"));
+    REQUIRE(awaitState("RCI"));
 }
 
 TEST_CASE_FIXTURE(
@@ -780,11 +779,11 @@ TEST_CASE_FIXTURE(
             sizeof(command));
     REQUIRE(awaitState("ERROR_STATE"));
     CHECK_FALSE(session->Active());
-    CHECK(robot.IsRciEnabled());
+    CHECK_FALSE(robot.IsRciEnabled());
     CHECK(robot.GetRciStatus()["control_active"] == false);
     CHECK(robot.hardware->SafetyStopRequested());
     std::shared_ptr<rocos::ServoSession> next;
-    CHECK(robot.StartRciControl(next, port) == Result::ConflictTaskRunning);
+    CHECK(robot.StartRciControl(next, port) == Result::ServoNotInitialized);
     CHECK_FALSE(next);
     sockpp::udp_socket probe;
     CHECK(probe.bind(sockpp::inet_address("127.0.0.1", port)));
@@ -800,11 +799,92 @@ TEST_CASE_FIXTURE(Fixture,"RCI rapid start stop preserves the control thread and
         REQUIRE(robot.StartRciControl(session,port)==Result::NoError);
         std::this_thread::sleep_for(std::chrono::microseconds(100+(i%10)*500));
         REQUIRE(robot.StopRciControl()==Result::NoError);
-        REQUIRE(awaitState("STOPPED"));
+        REQUIRE(awaitState("RCI"));
         CHECK(robot.IsControlActive());
         CHECK_FALSE(session->Active());
         const auto status=robot.GetRciStatus();
         REQUIRE(status["last_control"].is_object());
         CHECK(status["last_control"]["fault_code"]==0);
+    }
+}
+
+TEST_CASE_FIXTURE(Fixture, "RCI standby is enabled idle motion with a consistent snapshot") {
+    REQUIRE(robot.EnableRci() == Result::NoError);
+    REQUIRE(robot.EnableRci() == Result::NoError);
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    const auto snapshot = robot.GetRobotStateSnapshot();
+    CHECK(snapshot.state_string == "RCI");
+    CHECK(snapshot.rci["robot_state"] == snapshot.state_string);
+    CHECK(snapshot.rci["enabled"] == true);
+    CHECK(snapshot.rci["control_active"] == false);
+    CHECK(snapshot.control_active);
+    CHECK_FALSE(snapshot.motion_busy);
+    CHECK(robot.WaitMove() == Result::NoError);
+    REQUIRE(robot.SetDisabled() == Result::NoError);
+    CHECK(robot.GetStateString() == "IDLE");
+    CHECK_FALSE(robot.IsRciEnabled());
+    CHECK(robot.EnableRci() == Result::NotEnabled);
+}
+
+TEST_CASE_FIXTURE(Fixture, "RCI takeover transfers credentials and closes the session") {
+    REQUIRE(robot.EnableRci() == Result::NoError);
+    std::shared_ptr<rocos::ServoSession> session;
+    SUBCASE("standby") {}
+    SUBCASE("active session") {
+        sockpp::udp_socket reservation;
+        REQUIRE(reservation.bind(sockpp::inet_address("127.0.0.1", 0)));
+        const auto port = sockpp::inet_address(reservation.address()).port();
+        reservation.close();
+        REQUIRE(robot.StartRciControl(session, port) == Result::NoError);
+    }
+    const auto result = post("/api/control/takeover", {{"client_id", "rci-next-owner"}});
+    REQUIRE(result["success"] == true);
+    CHECK(post("/api/control/heartbeat", Json::object())["code"] == 3007);
+    credentials = {{"X-Rocos-Control-Token", result["data"]["token"].get<std::string>()},
+                   {"X-Rocos-Client-Id", result["data"]["client_id"].get<std::string>()}};
+    CHECK(post("/api/control/heartbeat", Json::object())["success"] == true);
+    REQUIRE(awaitState("STOPPED"));
+    CHECK_FALSE(robot.IsRciEnabled());
+    if (session) CHECK_FALSE(session->Active());
+    CHECK(robot.GetRciStatus()["closing"] == false);
+}
+
+TEST_CASE_FIXTURE(Fixture, "RCI disable hardware while stopping reaches IDLE") {
+    REQUIRE(robot.EnableRci() == Result::NoError);
+    sockpp::udp_socket reservation;
+    REQUIRE(reservation.bind(sockpp::inet_address("127.0.0.1", 0)));
+    const auto port = sockpp::inet_address(reservation.address()).port();
+    reservation.close();
+    std::shared_ptr<rocos::ServoSession> session;
+    REQUIRE(robot.StartRciControl(session, port) == Result::NoError);
+    REQUIRE(robot.StopRciControl() == Result::NoError);
+    REQUIRE(robot.SetDisabled() == Result::NoError);
+    REQUIRE(awaitState("IDLE"));
+    CHECK_FALSE(robot.IsRciEnabled());
+    CHECK_FALSE(session->Active());
+}
+
+TEST_CASE_FIXTURE(Fixture, "RCI takeover and start serialize session admission") {
+    for (int attempt = 0; attempt < 20; ++attempt) {
+        REQUIRE(robot.EnableRci() == Result::NoError);
+        sockpp::udp_socket reservation;
+        REQUIRE(reservation.bind(sockpp::inet_address("127.0.0.1", 0)));
+        const auto port = sockpp::inet_address(reservation.address()).port();
+        reservation.close();
+        std::shared_ptr<rocos::ServoSession> session;
+        Result started = Result::Fatal;
+        std::thread starter([&] { started = robot.StartRciControl(session, port); });
+        const auto takeover = post("/api/control/takeover", Json::object());
+        starter.join();
+        REQUIRE(takeover["success"] == true);
+        CHECK((started == Result::NoError || started == Result::ServoNotInitialized ||
+               started == Result::ConflictTaskRunning));
+        REQUIRE(awaitState("STOPPED"));
+        CHECK_FALSE(robot.IsRciEnabled());
+        if (session) CHECK_FALSE(session->Active());
+        const auto snapshot = robot.GetRobotStateSnapshot();
+        CHECK(snapshot.state_string == snapshot.rci["robot_state"]);
+        CHECK(snapshot.rci["enabled"] == false);
+        CHECK(snapshot.rci["control_active"] == false);
     }
 }

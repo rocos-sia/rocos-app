@@ -57,6 +57,7 @@ namespace {
     }; // 1 空闲状态，机器人传感器与执行器就绪，等待使能命令
     class STOPPED {
     }; // 2 停止状态，机器人上使能，不会动
+    class RCI {}; // 已使能的外部控制待命态
     class RUNNING {
     }; // 3 运行状态，机器人正在执行运动
     class PAUSED {
@@ -118,6 +119,8 @@ namespace {
     }; // 继续请求
     struct EventServoReq {
     }; // 伺服请求
+    struct EventRciEnable {};
+    struct EventRciClose {};
     struct EventResetReq {
     }; // 恢复请求
 
@@ -146,6 +149,12 @@ namespace {
     namespace sml = boost::sml;
 
     const auto action_stopped = [](rocos::Robot &robot) { robot.on_fsm_stopped(); };
+    const auto action_rci = [](rocos::Robot &robot) { robot.on_fsm_rci(); };
+    const auto return_rci = [](rocos::Robot &robot) { return robot.ResumeRciAfterStop(); };
+    const auto disable_after_stop = [](rocos::Robot &robot) { return robot.DisableAfterStop(); };
+    const auto return_stopped = [](rocos::Robot &robot) {
+        return !robot.ResumeRciAfterStop() && !robot.DisableAfterStop();
+    };
     const auto action_starting = [](rocos::Robot &robot) { robot.on_fsm_starting(); };
     const auto action_running = [](rocos::Robot &robot) { robot.on_fsm_running(); }; //TODO：目前没有任何处理
     const auto action_pausing = [](rocos::Robot &robot) { robot.on_fsm_pausing(); };
@@ -173,6 +182,13 @@ namespace {
                 state<class STOPPED> + event<EventStartReq> = state<class STARTING>, //   STOPPED->STARING
                 state<class STOPPED> + event<EventServoReq> = state<class SERVOING>, //   STOPPED->SERVOING
 
+                state<class STOPPED> + event<EventRciEnable> = state<class RCI>,
+                state<class RCI> + sml::on_entry<_> / action_rci,
+                state<class RCI> + event<EventServoReq> = state<class SERVOING>,
+                state<class RCI> + event<EventRciClose> = state<class STOPPED>,
+                state<class RCI> + event<EventDisableReq> = state<class DISABLING>,
+                state<class RCI> + event<EventErrorOccurred> = state<class ERROR_STATE>,
+
                 state<class RUNNING> + sml::on_entry<_> / action_running, // 3 RUNNING
                 state<class RUNNING> + event<EventStopped> = state<class STOPPED>,
                 //todo     EventAtTarget不是必要的应该直接success
@@ -187,7 +203,9 @@ namespace {
 
                 state<class SERVOING> + sml::on_entry<_> / action_servoing, // 5 SERVOING
                 state<class SERVOING> + event<EventStopReq> = state<class STOPPING>, //   SERVOING->STOPPING
-                state<class SERVOING> + event<EventSuccessed> = state<class STOPPED>, //   SERVOING->STOPPED（安全兜底）
+                state<class SERVOING> + event<EventSuccessed> [return_rci] = state<class RCI>,
+                state<class SERVOING> + event<EventSuccessed> [disable_after_stop] = state<class DISABLING>,
+                state<class SERVOING> + event<EventSuccessed> [return_stopped] = state<class STOPPED>, //   SERVOING->STOPPED（安全兜底）
 
                 state<class ENABLING> + sml::on_entry<_> / action_enabling, // 6 ENABLING
                 state<class ENABLING> + event<EventEnabled> = state<class STOPPED>, // 6 ENABLING->STOPPED
@@ -202,8 +220,12 @@ namespace {
                 state<class STARTING> + event<EventRunning> = state<class RUNNING>, //   STARTING->RUNNING
 
                 state<class STOPPING> + sml::on_entry<_> / action_stopping, // 9 STOPPING
-                state<class STOPPING> + event<EventStopped> = state<class STOPPED>,
-                state<class STOPPING> + event<EventSuccessed> = state<class STOPPED>, //   STOPPING->STOPPED
+                state<class STOPPING> + event<EventStopped> [return_rci] = state<class RCI>,
+                state<class STOPPING> + event<EventStopped> [disable_after_stop] = state<class DISABLING>,
+                state<class STOPPING> + event<EventStopped> [return_stopped] = state<class STOPPED>,
+                state<class STOPPING> + event<EventSuccessed> [return_rci] = state<class RCI>,
+                state<class STOPPING> + event<EventSuccessed> [disable_after_stop] = state<class DISABLING>,
+                state<class STOPPING> + event<EventSuccessed> [return_stopped] = state<class STOPPED>, //   STOPPING->STOPPED
 
                 state<class PAUSING> + sml::on_entry<_> / action_pausing, // 10 PAUSING->RESUMING
                 // TODO                这个地方应该是success
@@ -257,7 +279,8 @@ namespace rocos {
             std::unique_lock<std::recursive_mutex> command_lock(command_mtx_, std::defer_lock);
             if constexpr (std::is_same_v<Event, EventStartReq> || std::is_same_v<Event, EventServoReq> ||
                           std::is_same_v<Event, EventResumeReq> || std::is_same_v<Event, EventEnableReq> ||
-                          std::is_same_v<Event, EventDisableReq> || std::is_same_v<Event, EventResetReq>) {
+                          std::is_same_v<Event, EventDisableReq> || std::is_same_v<Event, EventResetReq> ||
+                          std::is_same_v<Event, EventRciEnable> || std::is_same_v<Event, EventRciClose>) {
                 command_lock.lock();
             }
             std::lock_guard<std::recursive_mutex> lock(mtx_);
@@ -298,6 +321,7 @@ namespace rocos {
     }
 
     void Robot::on_fsm_disabling() {
+        servo_watchdog_armed_.store(false);
         FinishRciControl();
         log_ptr_->info("Robot disable requested.");
 
@@ -414,10 +438,20 @@ namespace rocos {
         }
       }
     }
+    void Robot::on_fsm_rci() {
+        on_fsm_stopped(); // 保留最终下发参考并回收已结束的伺服会话。
+        log_ptr_->info("Robot entered RCI; holding reference and waiting for external control.");
+    }
+
+    bool Robot::ResumeRciAfterStop() const {
+        return rci_session_ && !rci_closing_ && !disable_after_stop_;
+    }
+
     void Robot::on_fsm_stopped() {
       servo_watchdog_armed_.store(false);
       FinishRciControl();
-      emitLogEvent(LogEventType::EnteredStopped, LogModule::Robot, 0, -1, 0, 0, 0, LogLevel::Info);
+      if (!impl_->is(sml::state<class RCI>))
+          emitLogEvent(LogEventType::EnteredStopped, LogModule::Robot, 0, -1, 0, 0, 0, LogLevel::Info);
 
       {
         std::lock_guard<std::mutex> lock(mtx_);
@@ -760,6 +794,8 @@ namespace rocos {
     }
 
     std::string Robot::GetStateString() const {
+        auto state_lock = impl_->lockState();
+        if (impl_->is(sml::state<class RCI>)) return "RCI";
         if (impl_->is(sml::state<class IDLE>)) {
             return "IDLE";
         } else if (impl_->is(sml::state<class ENABLING>)) {
@@ -798,12 +834,16 @@ namespace rocos {
         snap.timestamp = std::chrono::duration<double>(
             std::chrono::system_clock::now().time_since_epoch()).count();
 
-        // FSM 状态
-        snap.state_string = GetStateString();
-        snap.is_enabled = IsEnabled();
-        snap.is_running = IsRunning();
-        snap.control_active = IsControlActive();
-        snap.motion_busy = IsMotionBusy();
+        // 状态机与 RCI 字段来自同一个受锁快照。
+        {
+            auto state_lock = impl_->lockState();
+            snap.state_string = GetStateString();
+            snap.is_enabled = IsEnabled();
+            snap.is_running = IsRunning();
+            snap.control_active = IsControlActive();
+            snap.motion_busy = IsMotionBusy();
+            snap.rci = GetRciStatus();
+        }
         {
             std::lock_guard<std::mutex> lock(mtx_);
             snap.work_mode = work_mode_;
@@ -866,6 +906,12 @@ namespace rocos {
 
     Result Robot::SetDisabled() {
         log_ptr_->info("Disable command received.");
+        auto command_lock = LockToolState();
+        auto state_lock = impl_->lockState();
+        if (rci_session_) {
+            disable_after_stop_ = true;
+            return DisableRci();
+        }
         if (!impl_->process_event(EventDisableReq{})) {
             log_ptr_->error("Disable command rejected in the current robot state.");
             return Result::JointStateError;
@@ -894,11 +940,11 @@ namespace rocos {
             return Result::JointStateError;
         }
 
-        if (impl_->is(sml::state<class STOPPED>)) {
+        if (impl_->is(sml::state<class STOPPED>) || impl_->is(sml::state<class IDLE>)) {
             return Result::NoError;
         }
 
-        log_ptr_->error("ResetFault did not reach STOPPED: state={}.", GetStateString());
+        log_ptr_->error("ResetFault did not reach STOPPED or IDLE: state={}.", GetStateString());
         return Result::Fatal;
     }
 
@@ -1207,14 +1253,16 @@ namespace rocos {
                || impl_->is(sml::state<class RESUMING>)
                || impl_->is(sml::state<class STOPPING>)
                || impl_->is(sml::state<class DISABLING>)
+               || impl_->is(sml::state<class RCI>)
                || impl_->is(sml::state<class STOPPED>)
                || impl_->is(sml::state<class STARTING>)
                || impl_->is(sml::state<class SERVOING>);
     }
 
     bool Robot::IsMotionBusy() const {
-        return impl_->is(sml::state<class STARTING>)
-            || (IsControlActive() && !impl_->is(sml::state<class STOPPED>));
+        auto state_lock = impl_->lockState();
+        return IsControlActive() && !impl_->is(sml::state<class STOPPED>) &&
+               !impl_->is(sml::state<class RCI>);
     }
 
     Result Robot::WaitMove() {
@@ -1707,6 +1755,10 @@ namespace rocos {
     }
 
     Result Robot::StopMotion() {
+        auto command_lock = LockToolState();
+        auto state_lock = impl_->lockState();
+        if (impl_->is(sml::state<class RCI>) || impl_->is(sml::state<class STOPPING>))
+            return Result::NoError;
         //TODO: 直接判断是否支持停止，不支持直接忽略，但应该都需要支持，所以后续要删掉
         {
             std::lock_guard<std::mutex> lock(mtx_);
@@ -2009,9 +2061,10 @@ namespace rocos {
         auto state_lock = impl_->lockState();
         if (rci_closing_) return Result::ConflictTaskRunning;
         if (rci_enabled_) return Result::NoError;
+        if (!IsEnabled()) return Result::NotEnabled;
         if (!impl_->is(sml::state<class STOPPED>) || script_active_)
             return Result::ConflictTaskRunning;
-        rci_enabled_ = true;
+        if (!impl_->process_event(EventRciEnable{})) return Result::ConflictTaskRunning;
         log_ptr_->info("RCI enabled; waiting for an external control session.");
         return Result::NoError;
     }
@@ -2022,8 +2075,8 @@ namespace rocos {
         auto command_lock = LockToolState();
         auto state_lock = impl_->lockState();
         if (!rci_enabled_) return Result::ServoNotInitialized;
-        if (rci_closing_ || rci_active_ ||
-            !impl_->is(sml::state<class STOPPED>))
+        if (rci_closing_ || rci_session_ ||
+            !impl_->is(sml::state<class RCI>))
             return Result::ConflictTaskRunning;
         if (port == 0 || (mode != "joint" && mode != "cartesian"))
             return Result::IllegalParameter;
@@ -2031,11 +2084,11 @@ namespace rocos {
         next->client_ipv4 = client_ipv4;
         servo_mode_ = mode == "joint" ? MotionMode::kJointPosition
                                       : MotionMode::kCartesianPosition;
-        rci_active_ = true;
+        rci_session_ = next;
         const auto result = StartServo(port, next);
         if (result != Result::NoError) {
             next->valid = false;
-            rci_active_ = false;
+            rci_session_.reset();
             return result;
         }
         session = std::move(next);
@@ -2046,7 +2099,7 @@ namespace rocos {
         auto command_lock = LockToolState();
         auto state_lock = impl_->lockState();
         if (!rci_enabled_) return Result::ServoNotInitialized;
-        if (!rci_active_ || impl_->is(sml::state<class STOPPING>))
+        if (!rci_session_ || impl_->is(sml::state<class STOPPING>))
             return Result::NoError;
         return StopMotion();
     }
@@ -2056,25 +2109,29 @@ namespace rocos {
         auto state_lock = impl_->lockState();
         if (!rci_enabled_) return Result::NoError;
         rci_closing_ = true;  // 完成停止前保持入口互斥。
-        if (rci_active_) {
+        if (rci_session_) {
             const auto result = StopRciControl();
-            if (result != Result::NoError) rci_closing_ = false;
+            if (result != Result::NoError) impl_->process_event(EventErrorOccurred{});
             return result;
         }
-        FinishRciControl();
+        if (!impl_->process_event(EventRciClose{})) return Result::ConflictTaskRunning;
         return Result::NoError;
     }
 
     void Robot::FinishRciControl() {
-        rci_active_ = false;
-        if (rci_closing_.exchange(false)) rci_enabled_ = false;
+        if (rci_session_) rci_session_->valid = false;
+        rci_session_.reset();
+        rci_closing_ = false;
+        disable_after_stop_ = false;
+        // 发布缓存供持有运动锁的写入口读取，避免反向获取 FSM 锁。
+        rci_enabled_ = impl_->is(sml::state<class RCI>);
     }
 
     nlohmann::json Robot::GetRciStatus() const {
         auto state_lock = impl_->lockState();
         nlohmann::json status = {{"enabled", rci_enabled_.load()},
-                {"closing", rci_closing_.load()},
-                {"control_active", rci_active_.load()},
+                {"closing", rci_closing_},
+                {"control_active", static_cast<bool>(rci_session_)},
                 {"robot_state", GetStateString()},
                 {"last_control", last_servo_status_}};
         std::lock_guard<std::mutex> lock(mtx_);
@@ -2107,6 +2164,7 @@ namespace rocos {
             Result rc = servo->Reset();
             *startup_result = rc;
             if (rc != Result::NoError) {
+                last_servo_status_ = servo->GetStatus();
                 return rc;
             }
             {

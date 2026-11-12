@@ -47,9 +47,9 @@ inline Arguments arguments(int argc, char** argv) {
 inline void prepare(librocos::Robot& robot, const Arguments& args) {
     const auto state = robot.readOnce();
     if (args.joint >= state.dof) throw std::invalid_argument("Joint index exceeds robot DOF");
-    if (!state.enabled || state.robot_state != "STOPPED")
+    if (!state.enabled || (state.robot_state != "STOPPED" && state.robot_state != "RCI"))
         throw std::runtime_error(
-            "Enable the prepared robot and wait for STOPPED before running motion examples");
+            "Enable the prepared robot and wait for STOPPED or RCI before running motion examples");
     std::cout << "Joint " << args.joint << ", displacement " << args.amplitude << " rad, duration "
               << args.duration << " s. Press Enter to start.\n";
     if (std::cin.get() == std::char_traits<char>::eof())
