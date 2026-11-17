@@ -1,6 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "test/doctest.h"
 #include "src/diagnostics_http_server.hpp"
+#include "src/log_journal.hpp"
 #include <filesystem>
 #include <fstream>
 #include <sys/socket.h>
@@ -23,7 +24,7 @@ struct Fixture {
     std::unique_ptr<LogManager> logs;
     std::unique_ptr<DiagnosticsHttpServer> server;
     int port;
-    Fixture() {
+    explicit Fixture(bool detailed = false) {
         char pattern[] = "/tmp/rocos-diagnostics-XXXXXX";
         auto path = mkdtemp(pattern);
         if (!path) throw std::runtime_error("mkdtemp failed");
@@ -35,6 +36,7 @@ struct Fixture {
         config.max_file_size = 16 * 1024 * 1024;
         config.max_files = 1;
         logs = std::make_unique<LogManager>(config);
+        if (detailed) logs->enableDetailedEvents({"test-left", "test-right"});
         DiagnosticsConfig diagnostics;
         diagnostics.host = "127.0.0.1";
         diagnostics.port = 0;
@@ -247,4 +249,75 @@ TEST_CASE_FIXTURE(Fixture, "Slow snapshot download keeps fixed length across wri
     auto restored = query.Get("/api/logs/file/latest");
     REQUIRE(restored);
     CHECK(restored->status == 200);
+}
+
+TEST_CASE("Dual-arm journal preserves arm context across concurrent producers and legacy schema") {
+    Fixture f(true);
+    auto producer = [&](LogScope scope, int ecat_id) {
+        ScopedLogContext context({scope, ecat_id});
+        f.logs->submit(LogLevel::Info, "DualArm.Http", "POST robot/movej accepted", 0, 0,
+                       {"POST robot/movej", "request-" + std::to_string(ecat_id), "accepted", 200, 1.5});
+        auto* rt = f.logs->createRtProducer();
+        bindRtLogProducer(rt);
+        setRtLogEpoch(logNowMicros());
+        emitRtLog(LogEventType::CycleFinished, LogModule::Robot, 0, -1, 0, 0, 0, LogLevel::Info);
+        emitRtLog(LogEventType::EnteredError, LogModule::Robot, -1);
+        bindRtLogProducer(nullptr);
+        f.logs->releaseRtProducer(rt);
+    };
+    std::thread left([&] { producer(LogScope::Left, 0); });
+    std::thread right([&] { producer(LogScope::Right, 1); });
+    left.join(); right.join();
+    CHECK(currentLogContext().scope == LogScope::Process);
+    REQUIRE(until([&] { return f.logs->detailedEvents()->query("", 100)["events"].size() == 6; }));
+    httplib::Client client("127.0.0.1", f.port);
+    auto response = client.Get("/api/dualarm/logs?limit=100");
+    REQUIRE(response); REQUIRE(response->status == 200);
+    auto data = LogJson::parse(response->body)["data"];
+    int left_count = 0, right_count = 0;
+    for (const auto& event : data["events"]) {
+        const bool is_left = event["arm"] == "left";
+        CHECK(event["ecat_id"] == (is_left ? 0 : 1));
+        CHECK(event["device_id"] == (is_left ? "test-left" : "test-right"));
+        is_left ? ++left_count : ++right_count;
+        if (event["category"] == "operation") CHECK(event["operation"]["outcome"] == "accepted");
+    }
+    CHECK(left_count == 3); CHECK(right_count == 3);
+    auto legacy = f.logs->query("", 100)["events"];
+    REQUIRE(legacy.size() == 2);
+    for (const auto& event : legacy) { CHECK(event.size() == 6); CHECK(event["level"] == "error"); }
+    Socket stream(f.port, "/api/dualarm/logs/stream?after=" + data["events"][0]["id"].get<std::string>());
+    CHECK(stream.header().find("200 OK") != std::string::npos);
+    CHECK(stream.through(data["events"].back()["id"]).find("\"device_id\"") != std::string::npos);
+    stream.close();
+    CHECK(client.Get("/api/dualarm/logs?limit=0")->status == 400);
+    CHECK(client.Get("/api/dualarm/logs/stream?after=invalid")->status == 400);
+    auto restarted = f.logs->detailedEvents()->query("previous-session:1", 100);
+    CHECK(restarted["gap"]["reason"] == "server_restarted");
+    auto file = client.Get("/api/logs/file/latest");
+    REQUIRE(file); CHECK(file->body.find("arm=left ecat_id=0") != std::string::npos);
+    CHECK(file->body.find("arm=right ecat_id=1") != std::string::npos);
+    CHECK(file->body.find("request_id=request-0 outcome=accepted") != std::string::npos);
+}
+TEST_CASE("Dual-arm journal bounds history and replays gaps") {
+    LogJournal journal;
+    for (int i = 0; i < 4200; ++i) journal.publish({{"message", "entry"}});
+    const auto data = journal.query("", 1);
+    const auto id = data["next_id"].get<std::string>();
+    const auto session = id.substr(0, id.find(':'));
+    auto gap = journal.query(session + ":1", 500);
+    CHECK(gap["gap"]["reason"] == "buffer_overrun");
+    CHECK(gap["has_more"] == true);
+    journal.publishGap(3);
+    CHECK(journal.query(id, 10)["gap"]["count"] == 3);
+    CHECK(journal.query(id, 10)["next_id"] != id);
+    auto subscription = journal.subscribe(id);
+    std::string frame;
+    REQUIRE(subscription->wait(frame, std::chrono::milliseconds(100)));
+    CHECK(frame.find("producer_overflow") != std::string::npos);
+    journal.stop(); CHECK_FALSE(subscription->wait(frame, std::chrono::milliseconds(1)));
+}
+TEST_CASE_FIXTURE(Fixture, "Single-arm diagnostics does not expose the dual-arm journal") {
+    httplib::Client client("127.0.0.1", port);
+    CHECK(client.Get("/api/dualarm/logs")->status == 404);
 }

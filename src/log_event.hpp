@@ -43,6 +43,21 @@ enum class LogEventType : uint8_t {
     ServoIkDiscontinuity, ServoReferenceDeviation, ServoReferenceInfeasible,
     ServoFeedbackPosition, ServoFeedbackVelocity, ServoFeedbackInvalid, ServoGuardStop
 };
+enum class LogScope : int32_t { Process = 0, Left = 1, Right = 2 };
+struct LogContext {
+    LogScope scope{LogScope::Process};
+    int32_t ecat_id{-1};
+};
+LogContext currentLogContext() noexcept;
+class ScopedLogContext {
+public:
+    explicit ScopedLogContext(LogContext context) noexcept;
+    ~ScopedLogContext();
+    ScopedLogContext(const ScopedLogContext&) = delete;
+    ScopedLogContext& operator=(const ScopedLogContext&) = delete;
+private:
+    LogContext previous_;
+};
 struct RtLogEvent {
     uint64_t elapsed_us{0}; // 启动日历基准加周期偏移，入口不读取时钟。
     uint64_t cycle{0};
@@ -52,6 +67,7 @@ struct RtLogEvent {
     int32_t code{0};
     int32_t joint{-1}; // 对外英文使用从 1 开始的关节编号。
     double value{0}, lower{0}, upper{0};
+    LogContext context{};
 };
 static_assert(std::is_trivially_copyable<RtLogEvent>::value, "RT event must be a value record");
 static_assert(sizeof(RtLogEvent) <= 64, "RT event size budget");

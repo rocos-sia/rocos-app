@@ -1,4 +1,6 @@
 #include "frame_registry.hpp"
+#include "tool_calibration.hpp"
+#include <chrono>
 #include <yaml-cpp/yaml.h>
 #include <atomic>
 #include <cmath>
@@ -291,6 +293,50 @@ void FrameRegistry::updatePackage(const std::string& name, const rocos::Frame& m
     next->tools[name]=mount*tcp;
     if (publish(std::move(next),true)!=Result::NoError) throw std::runtime_error("Cannot persist tool overrides; registry retained");
 }
+Result FrameRegistry::saveCalibration(const std::string& name,
+                                      const ToolCalibrationSolution& solution,
+                                      const std::string& digest, uint64_t revision,
+                                      uint64_t& saved_revision) {
+    if (!validName(name) || !validFrame(solution.frame) ||
+        !std::isfinite(solution.rms_error) || solution.rms_error < 0 ||
+        !std::isfinite(solution.max_error) || solution.max_error < 0 ||
+        !std::isfinite(solution.condition_number) || solution.condition_number < 0 ||
+        !std::isfinite(solution.axis_angle_degrees)) return Result::IllegalParameter;
+    std::lock_guard<std::mutex> lock(writer_mutex_);
+    auto next = std::make_shared<FrameRegistryState>(*snapshot());
+    const auto found = next->packages.find(name);
+    uint64_t committed_revision = 0;
+    if (digest.empty()) {
+        if (revision != 0 || found != next->packages.end()) return Result::CallingConflictError;
+        next->tools[name] = solution.frame;
+    } else {
+        if (found == next->packages.end() || found->second.digest != digest ||
+            found->second.revision != revision) return Result::CallingConflictError;
+        auto& tool = found->second;
+        const auto local_tcp = tool.mount.Inverse() * solution.frame;
+        if (!validFrame(local_tcp)) return Result::IllegalParameter;
+        YAML::Node metadata;
+        metadata["timestamp"] = std::chrono::duration<double>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        metadata["robot_id"] = robot_id_;
+        metadata["package_digest"] = tool.digest;
+        metadata["mount"] = ToolPackageFiles::pose(tool.mount);
+        metadata["flange_tcp"] = ToolPackageFiles::pose(solution.frame);
+        metadata["rms_error"] = solution.rms_error;
+        metadata["max_error"] = solution.max_error;
+        metadata["condition_number"] = solution.condition_number;
+        metadata["axis_angle_degrees"] = solution.axis_angle_degrees;
+        tool.tcp = local_tcp;
+        tool.calibration_yaml = calibrationYaml(metadata);
+        tool.revision = allocateRevision();
+        committed_revision = tool.revision;
+        next->tools[name] = tool.mount * tool.tcp;
+    }
+    const auto result = publish(std::move(next), true);
+    if (result == Result::NoError) saved_revision = committed_revision;
+    return result;
+}
+
 std::string FrameRegistry::exportInstallation(const std::string& name) const {
     auto state=snapshot(); auto found=state->packages.find(name);
     if (found==state->packages.end()) throw std::invalid_argument("Package tool not found");

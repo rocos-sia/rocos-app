@@ -28,7 +28,7 @@ find_package(LibArchive REQUIRED)
 find_package(OpenSSL REQUIRED)
 
 # CMake VERSION 仅接受数字；完整 SemVer 版本单独拼接。
-set(ROCOS_APP_VERSION_PRERELEASE "rc.16")
+set(ROCOS_APP_VERSION_PRERELEASE "rc.17")
 set(ROCOS_APP_VERSION_FULL "${PROJECT_VERSION}")
 if(NOT ROCOS_APP_VERSION_PRERELEASE STREQUAL "")
     string(APPEND ROCOS_APP_VERSION_FULL "-${ROCOS_APP_VERSION_PRERELEASE}")
@@ -121,7 +121,7 @@ set(DEP_LIBS
         )
 
 
-add_library(logger SHARED src/logger.cpp src/log_event.cpp src/log_manager.cpp src/log_storage.cpp src/diagnostics_http_server.cpp)
+add_library(logger SHARED src/logger.cpp src/log_event.cpp src/log_manager.cpp src/log_journal.cpp src/log_storage.cpp src/diagnostics_http_server.cpp)
 target_include_directories(logger PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/json ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/httplib)
 target_link_libraries(logger PUBLIC spdlog::spdlog_header_only Threads::Threads)
 add_library(rocos::logger ALIAS logger)
@@ -694,3 +694,9 @@ target_link_libraries(motion_preview_test PRIVATE robot)
 target_compile_definitions(motion_preview_test PRIVATE PREVIEW_TEST_URDF="${CMAKE_CURRENT_SOURCE_DIR}/config/robots/talon/robot.urdf")
 add_test(NAME motion_preview_test COMMAND motion_preview_test)
 set_tests_properties(motion_preview_test PROPERTIES TIMEOUT 40 WORKING_DIRECTORY "${ROCOS_OFFLINE_TEST_DIRECTORY}")
+
+# Optional application: the existing single-arm entry and core stay unchanged.
+option(ROCOS_BUILD_DUALARM "Build the independent dual-arm application" OFF)
+if(ROCOS_BUILD_DUALARM)
+    add_subdirectory(dualarm)
+endif()

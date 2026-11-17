@@ -18,6 +18,7 @@
 // email: luoyang@sia.cn
 
 #include "robot.hpp"
+#include "tool_calibration.hpp"
 
 #include <yaml-cpp/yaml.h>
 
@@ -543,6 +544,7 @@ namespace rocos {
         control_thread_alive_.store(true);
         last_control_progress_ns_.store(ServoSession::Now());
         watchdog_thread_=std::thread([this] {
+            ScopedLogContext log_scope(log_context_);
             pthread_setname_np(pthread_self(), "rocos_watchdog");
             const auto scheduling = ConfigureRealtimeThread(21);
             if (scheduling.ready()) log_ptr_->info("Watchdog scheduling: {}", scheduling.description());
@@ -560,6 +562,7 @@ namespace rocos {
             }
         });
         control_thread_ = std::thread([this]() {
+            ScopedLogContext log_scope(log_context_);
             pthread_setname_np(pthread_self(), "rocos_control");
             const auto scheduling = ConfigureRealtimeThread(20);
             if (scheduling.ready()) log_ptr_->info("Control scheduling: {}", scheduling.description());
@@ -776,6 +779,7 @@ namespace rocos {
     }
 
     Robot::~Robot() {
+        ScopedLogContext log_scope(log_context_);
         if (control_thread_.joinable() &&
             !impl_->is(sml::state<class IDLE>) &&
             !impl_->is(sml::state<class ERROR_STATE>)) {
@@ -1620,6 +1624,22 @@ namespace rocos {
         if (!CanChangeToolState()) return Result::CallingConflictError;
         return change();
     }
+    std::optional<ToolPackage> Robot::GetToolPackage(const std::string& name) const {
+        const auto state = frames_.snapshot();
+        const auto found = state->packages.find(name);
+        if (found == state->packages.end()) return std::nullopt;
+        return found->second;
+    }
+
+    Result Robot::SaveToolCalibration(const std::string& name,
+                                     const ToolCalibrationSolution& solution,
+                                     const std::string& digest, uint64_t revision,
+                                     uint64_t& saved_revision) {
+        auto command_lock = LockToolState();
+        if (!CanChangeToolState()) return Result::ConflictTaskRunning;
+        return frames_.saveCalibration(name, solution, digest, revision, saved_revision);
+    }
+
     Result Robot::CaptureCalibrationPose(Frame& flange, std::vector<double>& joints, double& timestamp) const {
         // 采集耗时短，持命令门闩及 FSM → Robot 锁；状态检查和采集为同一操作。
         auto command_lock = LockToolState();

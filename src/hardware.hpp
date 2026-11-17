@@ -17,6 +17,7 @@
 // Shenyang Institute of Automation, Chinese Academy of Sciences.
 // email: luoyang@sia.cn
 #pragma once
+#include "log_event.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -446,6 +447,7 @@ private:
     // CiA 402 状态机（与 drive_pdo_cache_ 并行，同一索引对应同一驱动器）
     std::vector<DriveSMState> drive_sm_state_;
     std::mutex sm_mutex_;
+    LogContext log_context_{currentLogContext()};
     std::unique_ptr<std::thread> sm_thread_;
     std::atomic<bool> sm_thread_running_{false};
 };

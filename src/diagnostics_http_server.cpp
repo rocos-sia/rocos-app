@@ -1,4 +1,5 @@
 #include "diagnostics_http_server.hpp"
+#include "log_journal.hpp"
 #include <charconv>
 #include <unistd.h>
 
@@ -71,14 +72,19 @@ void DiagnosticsHttpServer::stop() {
     if (thread_.joinable()) thread_.join();
 }
 void DiagnosticsHttpServer::routes() {
-    for (const auto* path : {"/api/logs", "/api/logs/stream", "/api/logs/file/latest"}) {
+    std::vector<std::string> paths{"/api/logs", "/api/logs/stream", "/api/logs/file/latest"};
+    if (logs_.detailedEvents()) { paths.push_back("/api/dualarm/logs"); paths.push_back("/api/dualarm/logs/stream"); }
+    for (const auto& path : paths) {
         server_.Options(path, [](const httplib::Request&, httplib::Response& response) {
             response.status = 204;
             response.set_header("Access-Control-Allow-Methods", "GET, OPTIONS");
             response.set_header("Access-Control-Allow-Headers", "Last-Event-ID");
         });
     }
-    server_.Get("/api/logs", [this](const httplib::Request& request, httplib::Response& response) {
+    for (const bool detailed : {false, true}) {
+    if (detailed && !logs_.detailedEvents()) continue;
+    const std::string base = detailed ? "/api/dualarm/logs" : "/api/logs";
+    server_.Get(base, [this, detailed](const httplib::Request& request, httplib::Response& response) {
         if (stopping_) { error(response, 503, "Diagnostics service is stopping"); return; }
         try {
             size_t limit = 100;
@@ -87,20 +93,20 @@ void DiagnosticsHttpServer::routes() {
                 auto parsed = std::from_chars(text.data(), text.data() + text.size(), limit);
                 if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size()) throw std::invalid_argument("Invalid limit");
             }
-            auto data = logs_.query(request.get_param_value("after"), limit);
+            auto data = detailed ? logs_.detailedEvents()->query(request.get_param_value("after"), limit) : logs_.query(request.get_param_value("after"), limit);
             response.set_content(LogJson{{"success", true}, {"code", 0}, {"message", "ok"}, {"data", data}}.dump(), "application/json");
         } catch (const std::invalid_argument& e) { error(response, 400, e.what()); }
     });
-    server_.Get("/api/logs/stream", [this](const httplib::Request& request, httplib::Response& response) {
+    server_.Get(base + "/stream", [this, detailed](const httplib::Request& request, httplib::Response& response) {
         response.set_header("X-Rocos-SSE-Limit", std::to_string(config_.max_sse_clients));
         if (stopping_) { error(response, 503, "Diagnostics service is stopping"); return; }
         try {
             auto cursor = after(request);
             // 在发送响应头以前校验并原子预占配额。
-            if (!cursor.empty()) logs_.query(cursor, 1);
+            if (!cursor.empty()) { if (detailed) logs_.detailedEvents()->query(cursor, 1); else logs_.query(cursor, 1); }
             auto lease = reserve(sse_count_, config_.max_sse_clients);
             if (!lease) { error(response, 429, "SSE connection limit reached"); return; }
-            auto subscription = logs_.subscribe(cursor);
+            auto subscription = detailed ? logs_.detailedEvents()->subscribe(cursor) : logs_.subscribe(cursor);
             {
                 std::lock_guard<std::mutex> lock(subscriptions_mutex_);
                 if (stopping_) { subscription->close(); error(response, 503, "Diagnostics service is stopping"); return; }
@@ -127,6 +133,7 @@ void DiagnosticsHttpServer::routes() {
                 }, [subscription, lease](bool) { subscription->close(); });
         } catch (const std::invalid_argument& e) { error(response, 400, e.what()); }
     });
+    }
     server_.Get("/api/logs/file/latest", [this](const httplib::Request&, httplib::Response& response) {
         if (stopping_) { error(response, 503, "Diagnostics service is stopping"); return; }
         auto lease = reserve(download_count_, config_.max_downloads);

@@ -1,4 +1,5 @@
 #include "log_manager.hpp"
+#include "log_journal.hpp"
 #include "result.hpp"
 #include "spdlog/fmt/fmt.h"
 #include <charconv>
@@ -105,7 +106,7 @@ void emitLogEvent(LogEventType type, LogModule module, int code, int joint,
         return;
     }
     LogManager::instance().submitEvent({static_cast<uint64_t>(logNowMicros()), 0, type, level, module,
-                                      code, joint, value, lower, upper});
+                                      code, joint, value, lower, upper, currentLogContext()});
 }
 void LogSubscription::push(const std::shared_ptr<const LogFrame>& frame) {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -170,7 +171,15 @@ void LogManager::releaseRtProducer(RtLogProducer* producer) {
         if (&producers_[i] == producer) { producer_used_[i] = false; return; }
     }
 }
-void LogManager::submit(LogLevel level, std::string module, std::string message, int code, int64_t epoch_us) {
+void LogManager::enableDetailedEvents(const std::array<std::string, 2>& device_ids) {
+    // Startup only, before creating Robots or starting HTTP workers.
+    if (detailedEvents()) throw std::logic_error("Detailed logging already enabled");
+    for (const auto& id : device_ids) if (id.size() > 256) throw std::invalid_argument("Device ID too long");
+    device_ids_ = device_ids;
+    std::atomic_store(&detailed_, std::make_shared<LogJournal>());
+}
+std::shared_ptr<LogJournal> LogManager::detailedEvents() const { return std::atomic_load(&detailed_); }
+void LogManager::submit(LogLevel level, std::string module, std::string message, int code, int64_t epoch_us, LogOperation operation) {
     // 普通日志入口允许格式化；队列有界，竞争时也直接丢弃。
     if (!running_) return;
     // 重新拷贝边界内的内容，避免短 size 字符串仍携带调用方巨大的 capacity。
@@ -179,9 +188,13 @@ void LogManager::submit(LogLevel level, std::string module, std::string message,
     else message = std::string(message.data(), message.size());
     std::unique_lock<std::mutex> lock(pending_mutex_, std::try_to_lock);
     if (!lock || pending_.size() >= 1024) { ++nonrt_dropped_; return; }
-    pending_.push_back({level, std::move(module), std::move(message), code, epoch_us ? epoch_us : logNowMicros()});
+    operation.name.resize(std::min<size_t>(operation.name.size(), 128));
+    operation.request_id.resize(std::min<size_t>(operation.request_id.size(), 128));
+    operation.outcome.resize(std::min<size_t>(operation.outcome.size(), 32));
+    pending_.push_back({level, std::move(module), std::move(message), code, epoch_us ? epoch_us : logNowMicros(), currentLogContext(), std::move(operation)});
 }
 void LogManager::submitEvent(const RtLogEvent& event) {
+    ScopedLogContext scope(event.context);
     submit(event.level, moduleName(event.module), eventMessage(event), event.code, event.elapsed_us);
 }
 void LogManager::retain(LogFrame frame) {
@@ -203,6 +216,17 @@ void LogManager::publish(Pending record) {
     LogJson event{{"id", ""}, {"timestamp", logTimestamp(record.epoch_us)}, {"level", logLevelName(record.level)},
                   {"module", record.module}, {"code", record.code ? LogJson(record.code) : LogJson(nullptr)},
                   {"message", record.message}};
+    const char* arm = record.context.scope == LogScope::Left ? "left" : record.context.scope == LogScope::Right ? "right" : "process";
+    if (auto journal = detailedEvents(); journal && record.level >= LogLevel::Info) {
+        auto detail = event;
+        const bool scoped = record.context.scope != LogScope::Process;
+        detail["arm"] = arm;
+        detail["ecat_id"] = scoped ? LogJson(record.context.ecat_id) : LogJson(nullptr);
+        detail["device_id"] = scoped ? LogJson(device_ids_[record.context.scope == LogScope::Left ? 0 : 1]) : LogJson(nullptr);
+        detail["category"] = record.operation.name.empty() ? "log" : "operation";
+        detail["operation"] = record.operation.name.empty() ? LogJson(nullptr) : LogJson{{"name", record.operation.name}, {"request_id", record.operation.request_id}, {"outcome", record.operation.outcome}, {"http_status", record.operation.http_status}, {"duration_ms", record.operation.duration_ms}};
+        journal->publish(std::move(detail));
+    }
     std::string serialized;
     if (record.level >= LogLevel::Warn) {
         std::lock_guard<std::mutex> lock(history_mutex_);
@@ -226,9 +250,12 @@ void LogManager::publish(Pending record) {
     }
     // 文件和控制台使用 spdlog 风格的可读文本；HTTP 查询/SSE 继续使用上面的 JSON。
     storage_.enqueue(std::make_shared<FileLogRecord>(FileLogRecord{
-        record.level, consoleLine(record.level, record.module, record.message, record.epoch_us), record.epoch_us}));
+        record.level, consoleLine(record.level, record.module,
+            (detailedEvents() ? std::string("[arm=") + arm + " ecat_id=" + std::to_string(record.context.ecat_id) + "] " : "") + record.message +
+            (record.operation.name.empty() ? "" : " request_id=" + record.operation.request_id + " outcome=" + record.operation.outcome + " http_status=" + std::to_string(record.operation.http_status) + " code=" + std::to_string(record.code) + " duration_ms=" + std::to_string(record.operation.duration_ms)), record.epoch_us), record.epoch_us}));
 }
 void LogManager::publishGap(uint64_t count) {
+    if (auto journal = detailedEvents()) journal->publishGap(count);
     std::lock_guard<std::mutex> lock(history_mutex_);
     auto gap = gapJson("producer_overflow", history_.empty() ? session_ + ":0" : session_ + ":" + std::to_string(history_.front()->sequence), count);
     auto text = gapSse(gap);
@@ -320,7 +347,7 @@ void LogManager::run() {
             RtLogEvent event;
             // 每轮有上限，避免实时洪水饿死普通队列。
             for (size_t n = 0; n < 128 && producers_[i].queue_.tryPop(event); ++n) {
-                publish({event.level, moduleName(event.module), eventMessage(event), event.code, static_cast<int64_t>(event.elapsed_us)});
+                publish({event.level, moduleName(event.module), eventMessage(event), event.code, static_cast<int64_t>(event.elapsed_us), event.context, {}});
                 work = true;
             }
             const auto lost = producers_[i].dropped();
@@ -346,6 +373,7 @@ void LogManager::stop() {
         for (auto& weak : subscribers_) if (auto sub = weak.lock()) { sub->close(); sub->gaps_ = nullptr; }
         subscribers_.clear();
     }
+    if (auto journal = detailedEvents()) journal->stop();
     storage_.stop();
 }
 } // namespace rocos

@@ -257,6 +257,7 @@ Hardware::Hardware(const HardwareConfig& config, int ecat_id, uint32_t cycle_tim
 }
 
 Hardware::~Hardware() {
+    ScopedLogContext log_scope(log_context_);
     sm_thread_running_ = false;
     if (sm_thread_ && sm_thread_->joinable()) {
         sm_thread_->join();
@@ -808,6 +809,7 @@ bool Hardware::setDriverStates(size_t begin, size_t end, DriveState targetState)
 }
 
 void Hardware::smWorkingThread() {
+    ScopedLogContext log_scope(log_context_);
     while (sm_thread_running_) {
         {
             std::lock_guard<std::mutex> lock(sm_mutex_);

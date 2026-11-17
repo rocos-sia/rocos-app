@@ -10,6 +10,7 @@
 #include <vector>
 
 namespace rocos {
+struct ToolCalibrationSolution;
 struct FrameRegistryState {
     std::map<std::string, rocos::Frame> tools, objects;
     std::string active_tool, active_object;
@@ -44,6 +45,11 @@ public:
     void initializePackage(const ToolPackage& configured);
     void updatePackage(const std::string& name, const rocos::Frame& mount, const rocos::Frame& tcp,
                        const std::string& digest, uint64_t revision, const YAML::Node& calibration = YAML::Node());
+    // CallingConflictError: package identity/installation changed since capture.
+    // Empty digest and revision=0 select an ordinary tool. Publish only after persistence.
+    Result saveCalibration(const std::string& name, const ToolCalibrationSolution& solution,
+                           const std::string& digest, uint64_t revision,
+                           uint64_t& saved_revision);
     std::string exportInstallation(const std::string& name) const;
     void importInstallation(const std::string& yaml);
 private:

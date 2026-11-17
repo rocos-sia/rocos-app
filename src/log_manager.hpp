@@ -21,6 +21,7 @@ public:
     void close();
 private:
     friend class LogManager;
+    friend class LogJournal;
     void push(const std::shared_ptr<const LogFrame>& frame);
     std::mutex mutex_;
     std::condition_variable cv_;
@@ -28,6 +29,12 @@ private:
     size_t bytes_{0};
     bool closed_{false};
     std::atomic<uint64_t>* gaps_{nullptr};
+};
+class LogJournal;
+struct LogOperation {
+    std::string name, request_id, outcome;
+    int http_status{0};
+    double duration_ms{0};
 };
 class LogManager {
 public:
@@ -40,7 +47,9 @@ public:
     RtLogProducer* createRtProducer();
     void releaseRtProducer(RtLogProducer* producer);
     void submit(LogLevel level, std::string module, std::string message,
-                int code = 0, int64_t epoch_us = 0);
+                int code = 0, int64_t epoch_us = 0, LogOperation operation = {});
+    void enableDetailedEvents(const std::array<std::string, 2>& device_ids);
+    std::shared_ptr<LogJournal> detailedEvents() const;
     void submitEvent(const RtLogEvent& event); // 仅非实时后备路径。
     LogJson query(const std::string& after, size_t limit) const;
     std::shared_ptr<LogSubscription> subscribe(const std::string& after);
@@ -53,6 +62,8 @@ private:
         std::string module, message;
         int code;
         int64_t epoch_us;
+        LogContext context{};
+        LogOperation operation{};
     };
     uint64_t cursor(const std::string& after, bool& restarted) const;
     LogJson queryLocked(const std::string& after, size_t limit) const;
@@ -60,6 +71,8 @@ private:
     void publishGap(uint64_t count);
     void retain(LogFrame frame);
     void run();
+    std::array<std::string, 2> device_ids_{};
+    std::shared_ptr<LogJournal> detailed_;
     LogStorage storage_;
     std::atomic<bool> running_{true};
     std::thread thread_;

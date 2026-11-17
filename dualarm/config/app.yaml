@@ -1,0 +1,19 @@
+schema_version: 1
+http_host: "127.0.0.1"
+http_port: 8080
+http_control_ttl_seconds: 300
+workcell:
+  urdf: ../../../rocos-mujoco/config/dualarm/urdf/dualarm.urdf
+  asset_root: ../../../rocos-mujoco/config/dualarm
+diagnostics:
+  host: "127.0.0.1"
+  port: 8082
+logging:
+  directory: ../../build/dualarm/logs
+  file_level: info
+  console_level: info
+arms:
+  left:
+    config: left.yaml
+  right:
+    config: right.yaml

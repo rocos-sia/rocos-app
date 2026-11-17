@@ -300,6 +300,12 @@ class Robot {
   Result SaveFrames(const std::string& path = "") const;
   const std::string& GetFramesPath() const { return frames_.path(); }
   Result CaptureCalibrationPose(Frame& flange, std::vector<double>& joints, double& timestamp) const;
+  // Copy the current package installation; nullopt denotes an ordinary/new tool.
+  std::optional<ToolPackage> GetToolPackage(const std::string& name) const;
+  // ConflictTaskRunning: state disallows writes; CallingConflictError: stale installation.
+  Result SaveToolCalibration(const std::string& name, const ToolCalibrationSolution& solution,
+                             const std::string& digest, uint64_t revision,
+                             uint64_t& saved_revision);
 
   // MoveC 圆心+角度
   Result MoveC(const Frame& pose_start, const Frame& center_frame, double theta,
@@ -500,6 +506,7 @@ class Robot {
   std::shared_ptr<RtLogProducer> rt_log_producer_{
       LogManager::instance().createRtProducer(),
       [](RtLogProducer* producer) { LogManager::instance().releaseRtProducer(producer); }};
+  LogContext log_context_{currentLogContext()};
   Logger::logger_ptr log_ptr_ = nullptr;
 
   // FSM 初始状态是 ERROR_STATE，构造时会进入一次；用它区分“初始进入”和“真正的错误进入”
