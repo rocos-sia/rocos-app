@@ -66,8 +66,11 @@ public:
     // ─── Jog 特有 ───
     void setInitialPosition(const JntArray& q);
 
-    /// @brief 上位机周期喂入方向 + 速度模长
-    Result FeedJog(const JogVec& direction, double speed);
+    /// @brief 上位机周期喂入方向 + 速度模长；twist 在 BASE 表达。
+    /// @param flange_to_point 速度参考点相对法兰的偏移（法兰系表达）。
+    ///        TOOL 点动传入 TCP 偏移；归一化在参考点换算前完成。
+    Result FeedJog(const JogVec& direction, double speed,
+                   const Vector& flange_to_point = Vector::Zero());
 
     bool IsStopped() const { return state_.load() == State::Stopped; }
 
@@ -76,7 +79,7 @@ private:
     static double directionCosine(const JogVec& a, const JogVec& b);
 
     void reconfigureSpeedOtg(double target_speed);
-    JntArray computeJointVelocity();
+    Result computeJointVelocity(JntArray& q_dot);
 
     const double dt_;
     const double timeout_;
@@ -98,6 +101,7 @@ private:
     double target_speed_{0.0};
     double elapsed_since_feed_{0.0};
     bool   is_joint_space_{false};
+    Vector flange_to_point_;
 
     // ─── 原子变量（无锁读） ───
     std::atomic<State> state_{State::Active};

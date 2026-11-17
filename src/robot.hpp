@@ -449,6 +449,9 @@ class Robot {
 
  private:
 
+  Result moveJogging(const JogVec& direction, double speed, double timeout,
+                    double dir_threshold, const Vector& flange_to_point);
+
   friend class LuaScriptEngine;
   std::atomic<bool> script_active_{false};
   std::atomic<bool> rci_enabled_{false}; // FSM 转换时发布的模式缓存

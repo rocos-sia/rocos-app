@@ -131,6 +131,7 @@ Result MoveJog::Reset() {
     direction_        = JogVec{};
     target_speed_     = 0.0;
     is_joint_space_   = false;
+    flange_to_point_ = Vector::Zero();
     elapsed_since_feed_ = 0.0;
     state_.store(State::Active);
     has_started_.store(false);
@@ -152,10 +153,15 @@ void MoveJog::setInitialPosition(const JntArray& q) {
 // FeedJog — HTTP 线程旁路写入
 // ============================================================================
 
-Result MoveJog::FeedJog(const JogVec& direction, double speed) {
+Result MoveJog::FeedJog(const JogVec& direction, double speed,
+                        const Vector& flange_to_point) {
     if (state_.load() != State::Active) return Result::PlanError;
     if (!std::isfinite(speed)) return Result::ParameterNanOrInf;
     if (!vecIsFinite(direction)) return Result::ParameterNanOrInf;
+    if (!flange_to_point.data.allFinite()) return Result::ParameterNanOrInf;
+    if (flange_to_point.Norm() > 0.0 &&
+        (std::holds_alternative<JntArray>(direction) || !model_))
+        return Result::IllegalParameter;
 
     JogVec unit_dir;
     if (normalizeDirection(direction, unit_dir) < kSpeedEpsilon)
@@ -175,12 +181,17 @@ Result MoveJog::FeedJog(const JogVec& direction, double speed) {
         else if (std::holds_alternative<JntArray>(direction) != is_joint_space_) {
             return Result::IllegalParameter;
         }
+        // 参考点不能在同一次点动中切换，先停稳再重建。
+        else if (!Equal(flange_to_point_, flange_to_point, 1e-12)) {
+            return Result::IllegalParameter;
+        }
         // 运动中检测方向突变：余弦相似度 < 阈值 → 拒绝（不重置时间戳，看门狗继续跑）
         else if (directionCosine(direction_, unit_dir) < dir_threshold_) {
             return Result::PlanError;  // 不更新 elapsed_since_feed_，超时后自动刹车
         }
 
         direction_ = std::move(unit_dir);
+        flange_to_point_ = flange_to_point;
         target_speed_ = std::abs(speed);
         elapsed_since_feed_ = 0.0;
         has_started_.store(true);
@@ -248,7 +259,9 @@ Result MoveJog::GenerateRef(Reference& ref_out) {
         state_.store(State::Stopped);
     }
 
-    JntArray q_dot = computeJointVelocity();
+    JntArray q_dot(static_cast<unsigned int>(joint_count_));
+    const Result velocity_result = computeJointVelocity(q_dot);
+    if (velocity_result != Result::NoError) return velocity_result;
     for (unsigned int i = 0; i < q_integral_.rows(); ++i)
         q_integral_(i) += q_dot(i) * dt_;
 
@@ -256,10 +269,9 @@ Result MoveJog::GenerateRef(Reference& ref_out) {
     return plan_finished ? Result::PlanFinished : Result::NoError;
 }
 
-JntArray MoveJog::computeJointVelocity() {
+Result MoveJog::computeJointVelocity(JntArray& q_dot) {
     std::lock_guard<std::mutex> lock(mtx_);
     const double s = speed_otg_current_;
-    JntArray q_dot(static_cast<unsigned int>(joint_count_));
 
     if (is_joint_space_) {
         const auto& dir = std::get<JntArray>(direction_);
@@ -271,7 +283,16 @@ JntArray MoveJog::computeJointVelocity() {
         rocos::Twist cart_vel(tw.vel * s, tw.rot * s);
 
         if (model_) {
-            model_->GetJacobian(q_integral_, jacobian_);
+            if (flange_to_point_.data.squaredNorm() > 0.0 && tw.rot.data.squaredNorm() > 0.0) {
+                Frame flange;
+                const Result fk_result = model_->ForwardKinematics(q_integral_, flange);
+                if (fk_result != Result::NoError) return fk_result;
+                // v_TCP = v_flange + omega × r；每周期更新 r，停车时同样补偿。
+                const Vector r_base = flange.M * flange_to_point_;
+                cart_vel.vel -= cart_vel.rot * r_base;
+            }
+            const Result jacobian_result = model_->GetJacobian(q_integral_, jacobian_);
+            if (jacobian_result != Result::NoError) return jacobian_result;
 
             // SVD pinv: q_dot = J⁺ v
             const auto& J = jacobian_.data;
@@ -292,7 +313,7 @@ JntArray MoveJog::computeJointVelocity() {
             for (unsigned int i = 0; i < q_dot.rows(); ++i) q_dot(i) = qd(static_cast<int>(i));
         }
     }
-    return q_dot;
+    return Result::NoError;
 }
 
 

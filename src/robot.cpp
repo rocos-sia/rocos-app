@@ -1812,6 +1812,7 @@ namespace rocos {
         auto command_lock = LockToolState();
         if (IsRciEnabled()) return Result::ConflictTaskRunning;
         rocos::Rotation R_base_frame = rocos::Rotation::Identity();
+        Vector flange_to_point;
 
         switch (frame) {
             case JogFrame::BASE:
@@ -1823,7 +1824,11 @@ namespace rocos {
                 Frame T_flange_tool;
                 const Result rc = GetActiveToolFrame(T_flange_tool);
                 if (rc != Result::NoError) return rc;
-                R_base_frame = (getFlange() * T_flange_tool).M;
+                Frame flange;
+                const Result fk_result = ReadFlangePose(flange);
+                if (fk_result != Result::NoError) return fk_result;
+                R_base_frame = flange.M * T_flange_tool.M;
+                flange_to_point = T_flange_tool.p;
                 break;
             }
             case JogFrame::OBJECT: {
@@ -1838,18 +1843,25 @@ namespace rocos {
         Twist base_direction;
         base_direction.vel = R_base_frame * direction.vel;
         base_direction.rot = R_base_frame * direction.rot;
-        return MoveJogging(JogVec{base_direction}, speed, timeout, dir_threshold);
+        return moveJogging(JogVec{base_direction}, speed, timeout, dir_threshold,
+                           flange_to_point);
     }
 
     Result Robot::MoveJogging(const JogVec &direction, double speed,
                               double timeout, double dir_threshold) {
+        return moveJogging(direction, speed, timeout, dir_threshold, Vector::Zero());
+    }
+
+    Result Robot::moveJogging(const JogVec &direction, double speed,
+                             double timeout, double dir_threshold,
+                             const Vector& flange_to_point) {
         auto command_lock = LockToolState();
         if (IsRciEnabled()) return Result::ConflictTaskRunning;
         // ── 分支 1：已有活跃 MoveJog → 旁路喂饭 ──
         {
             std::lock_guard<std::mutex> lock(mtx_);
             if (auto *jog = dynamic_cast<MoveJog *>(motion.get())) {
-                const Result rc = jog->FeedJog(direction, speed);
+                const Result rc = jog->FeedJog(direction, speed, flange_to_point);
                 if (rc == Result::NoError) return rc;
             }
         }
@@ -1863,7 +1875,7 @@ namespace rocos {
 
         // ── 分支 3：全新启动 ──
         data_ready_callback_ = [this, direction, speed, timeout,
-                    dir_threshold]() -> Result {
+                    dir_threshold, flange_to_point]() -> Result {
                     auto new_jog = std::make_unique<MoveJog>(
                         dt_, timeout, model.get(), dir_threshold);
 
@@ -1874,7 +1886,7 @@ namespace rocos {
                     Result rc = new_jog->Reset();
                     if (rc != Result::NoError) return rc;
 
-                    rc = new_jog->FeedJog(direction, speed);
+                    rc = new_jog->FeedJog(direction, speed, flange_to_point);
                     if (rc != Result::NoError) return rc;
 
                     {

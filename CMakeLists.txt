@@ -28,7 +28,7 @@ find_package(LibArchive REQUIRED)
 find_package(OpenSSL REQUIRED)
 
 # CMake VERSION 仅接受数字；完整 SemVer 版本单独拼接。
-set(ROCOS_APP_VERSION_PRERELEASE "rc.15")
+set(ROCOS_APP_VERSION_PRERELEASE "rc.16")
 set(ROCOS_APP_VERSION_FULL "${PROJECT_VERSION}")
 if(NOT ROCOS_APP_VERSION_PRERELEASE STREQUAL "")
     string(APPEND ROCOS_APP_VERSION_FULL "-${ROCOS_APP_VERSION_PRERELEASE}")
@@ -416,6 +416,11 @@ target_link_libraries(move_jog_planner_linearity_test
         )
 # 离线测试 MoveJog + Model，不连接硬件，不加入 ctest
 # ./build/bin/move_jog_planner_linearity_test
+
+add_executable(move_jog_tcp_test test/move_jog_tcp_test.cc)
+target_link_libraries(move_jog_tcp_test PRIVATE robot)
+add_test(NAME move_jog_tcp_test COMMAND move_jog_tcp_test)
+set_tests_properties(move_jog_tcp_test PROPERTIES WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
 add_executable(move_svd_jog_planner_test test/move_svd_jog_planner_test.cc)
 target_link_libraries(move_svd_jog_planner_test
