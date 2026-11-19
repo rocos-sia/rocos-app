@@ -46,6 +46,7 @@
 #include "move_null_jog.hpp"
 #include "move_svd_jog.hpp"
 #include "move_servo.hpp"
+#include "position_command_validation.hpp"
 #include "position_controller.hpp"
 #include "realtime_thread.hpp"
 #include "zero_force_drag_controller.hpp"
@@ -342,6 +343,9 @@ namespace rocos {
             impl_->process_event(EventEnabled{});
         } else {
             log_ptr_->error("Robot enable was not confirmed; transitioning to ERROR_STATE.");
+            if (const auto* drives = dynamic_cast<const Hardware*>(hardware.get())) {
+                drives->LogDriveStatus();
+            }
             impl_->process_event(EventErrorOccurred{});
         }
     }
@@ -1920,30 +1924,32 @@ namespace rocos {
 
         // ── 分支 3：全新启动 ──
         data_ready_callback_ = [this, direction, speed, timeout,
-                    dir_threshold, flange_to_point]() -> Result {
-                    auto new_jog = std::make_unique<MoveJog>(
-                        dt_, timeout, model.get(), dir_threshold);
+                                dir_threshold, flange_to_point]() -> Result {
+            std::lock_guard<std::mutex> lock(mtx_);
+            // STOPPED 下的 CSP 保持目标是新点动的指令起点。
+            JntArray q_start;
+            try {
+                const bool holding_target = IsEnabled() && hardware->GetOutputSnapshot().mode == 8;
+                q_start = holding_target ? hardware->GetCmdPosition() : hardware->GetPosition();
+            } catch (const std::exception& error) {
+                log_ptr_->error("Jog start position could not be read: {}", error.what());
+                return Result::JointStateError;
+            }
+            Result rc = ValidateJointCommand(*model, q_start, nullptr, dt_);
+            if (rc != Result::NoError) return rc;
 
-                    const int n = getJointNum();
-                    JntArray q_current(static_cast<unsigned int>(n));
-                    for (int i = 0; i < n; ++i) q_current(i) = getJointPosition(i);
-                    new_jog->setInitialPosition(q_current);
-                    Result rc = new_jog->Reset();
-                    if (rc != Result::NoError) return rc;
+            auto new_jog = std::make_unique<MoveJog>(dt_, timeout, model.get(), dir_threshold);
+            new_jog->setInitialPosition(q_start);
+            rc = new_jog->Reset();
+            if (rc != Result::NoError) return rc;
 
-                    rc = new_jog->FeedJog(direction, speed, flange_to_point);
-                    if (rc != Result::NoError) return rc;
+            rc = new_jog->FeedJog(direction, speed, flange_to_point);
+            if (rc != Result::NoError) return rc;
 
-                    {
-                        std::lock_guard<std::mutex> lock(mtx_);
-                        motion = std::move(new_jog);
-                        executor->SwitchMotion(motion.get());
-                    }
-                    return Result::NoError;
-
-                    log_ptr_->error("executor is nullptr");
-                    return Result::Fatal;
-                };
+            motion = std::move(new_jog);
+            executor->SwitchMotion(motion.get());
+            return Result::NoError;
+        };
 
         if (!impl_->process_event(EventStartReq{})) {
             data_ready_callback_ = nullptr;  // 切换失败，清除无效回调

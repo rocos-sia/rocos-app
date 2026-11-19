@@ -4,11 +4,13 @@
 #include <librocos/robot.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <thread>
 
 #include "src/robot_http_server.hpp"
@@ -277,6 +279,57 @@ TEST_CASE("MoveJ completion holds the last submitted position despite feedback l
     CHECK(robot.hardware->GetPosition().data.isApprox(actual.data, 1e-10));
     CHECK(offline.master.getSlaveOutputVarValue<int32_t>(0, 2) ==
           1000 + static_cast<int32_t>(std::llround(direction * .004 * 200000)));
+}
+
+TEST_CASE("CSP jog starts from the held target despite J2 feedback lag") {
+    OfflineMaster offline;
+    auto config = offline.config();
+    config.hardware = rocos::Hardware::LoadConfigFromYAML(config.hardware_config);
+    auto& drives = config.hardware->drives;
+    const auto j2 = std::find_if(drives.begin(), drives.end(), [](const auto& drive) {
+        return drive.id == 1;
+    });
+    REQUIRE(j2 != drives.end());
+    auto& transform = j2->transform;
+    transform.pos_per_unit = 131072.0 / (2.0 * std::acos(-1.0));
+    transform.ratio = 1.0;
+
+    std::ifstream fixture_urdf(config.urdf);
+    REQUIRE(fixture_urdf.good());
+    std::string urdf((std::istreambuf_iterator<char>(fixture_urdf)), {});
+    const auto velocity = urdf.find("velocity=\"3\"", urdf.find("name=\"joint_2\""));
+    REQUIRE(velocity != std::string::npos);
+    urdf.replace(velocity, std::strlen("velocity=\"3\""), "velocity=\"2\"");
+    const auto temp_urdf = std::filesystem::temp_directory_path() /
+                           ("rocos-jog-" + std::to_string(offline.id) + ".urdf");
+    REQUIRE(static_cast<bool>(std::ofstream(temp_urdf) << urdf));
+    config.urdf = temp_urdf.string();
+
+    rocos::Robot robot(config);
+    std::filesystem::remove(temp_urdf);
+    REQUIRE(robot.SetEnabled() == Result::NoError);
+    REQUIRE(robot.GetStateString() == "STOPPED");
+    REQUIRE(robot.hardware->GetOutputSnapshot().mode == 8);
+
+    const auto hold = offline.master.getSlaveOutputVarValue<int32_t>(1, 2);
+    offline.master.setSlaveInputVarValue<int32_t>(1, 1, hold + 50);
+    REQUIRE(std::abs(robot.hardware->GetPosition()(1) -
+                     robot.hardware->GetCmdPosition()(1)) > .002);
+
+    rocos::JntArray direction(2);
+    direction(0) = 0.0;
+    direction(1) = -1.0;
+    REQUIRE(robot.MoveJogging(rocos::JogVec{direction}, .01, .3) == Result::NoError);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+    auto target = hold;
+    while (robot.GetStateString() == "RUNNING" && target == hold &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        target = offline.master.getSlaveOutputVarValue<int32_t>(1, 2);
+    }
+    CHECK(robot.GetStateString() == "RUNNING");
+    CHECK(target < hold);
+    CHECK_FALSE(robot.hardware->SafetyStopRequested());
 }
 
 TEST_CASE("CSP enable synchronizes feedback before activation and discards stale holds") {
