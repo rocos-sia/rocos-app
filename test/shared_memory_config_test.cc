@@ -206,8 +206,10 @@ TEST_CASE_FIXTURE(BusFixture, "App compatibility include rejects an incompatible
 
 TEST_CASE("Hardware enables all drive state machines together") {
     bool stalled = false;
+    bool slow_enable = false;
     SUBCASE("All drives must receive each transition before any drive advances") {}
     SUBCASE("A stalled first drive does not delay the remaining drives") { stalled = true; }
+    SUBCASE("Delayed operation-enabled feedback can arrive after 150 ms") { slow_enable = true; }
 
     BusFixture bus(3);
     auto& master = bus.master;
@@ -235,8 +237,14 @@ TEST_CASE("Hardware enables all drive state machines together") {
                 ok = hardware.GetJointState(1) == rocos::JntState::ENABLED &&
                      hardware.GetJointState(2) == rocos::JntState::ENABLED &&
                      hardware.GetJointState(0) ==
-                         (stalled ? rocos::JntState::DISABLED : rocos::JntState::ENABLED) &&
-                     elapsed < std::chrono::milliseconds(250);
+                         (stalled ? rocos::JntState::DISABLED : rocos::JntState::ENABLED);
+                if (stalled) {
+                    ok = ok && elapsed >= std::chrono::milliseconds(250) &&
+                         elapsed < std::chrono::milliseconds(400);
+                } else {
+                    ok = ok && elapsed < std::chrono::milliseconds(250);
+                }
+                if (slow_enable) ok = ok && elapsed >= std::chrono::milliseconds(150);
                 if (!stalled) {
                     // 重复使能也要完成状态确认。
                     hardware.SetEnabled();
@@ -256,6 +264,7 @@ TEST_CASE("Hardware enables all drive state machines together") {
     int stage = 0;
     int status = 0;
     pid_t finished = 0;
+    auto enable_feedback_time = std::chrono::steady_clock::time_point{};
     // 只模拟 PDO 状态反馈，不连接真实 EtherCAT 主站或硬件。
     while ((finished = waitpid(child, &status, WNOHANG)) == 0) {
         if (stalled) {
@@ -271,7 +280,11 @@ TEST_CASE("Hardware enables all drive state machines together") {
                 allReady =
                     allReady && master.getSlaveOutputVarValue<uint16_t>(id, 0) == commands[stage];
             }
-            if (allReady) {
+            if (allReady && (!slow_enable || stage < 2 ||
+                             std::chrono::steady_clock::now() >= enable_feedback_time)) {
+                if (slow_enable && stage == 0)
+                    enable_feedback_time = std::chrono::steady_clock::now() +
+                                           std::chrono::milliseconds(160);
                 for (int id = 0; id < 3; ++id) master.setSlaveInputVarValue(id, 0, states[stage]);
                 ++stage;
             }

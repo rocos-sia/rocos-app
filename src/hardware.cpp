@@ -482,6 +482,24 @@ void Hardware::SetEnabled() {
     setDriverStates(0, drive_sm_state_.size(), DriveState::OperationEnabled);
 }
 
+void Hardware::LogDriveStatus() const {
+    auto log_ptr = Logger::getInstance("Hardware");
+    for (size_t i = 0; i < config_.drives.size(); ++i) {
+        const auto& drive = config_.drives[i];
+        const auto& status_pdo = drive_pdo_cache_[i].status_word;
+        if (!status_pdo) {
+            log_ptr->error("Enable check: joint='{}', drive={}, 0x6041 unavailable (PDO not mapped).",
+                           drive.joint_name, drive.id);
+            continue;
+        }
+        const auto raw = status_pdo.read();
+        Statusword statusword;
+        statusword.setFromRawStatusword(raw);
+        log_ptr->error("Enable check: joint='{}', drive={}, 0x6041=0x{:04X}, state={}.",
+                       drive.joint_name, drive.id, raw, statusword.getDriveStateString());
+    }
+}
+
 void Hardware::SetDisabled() {
     for (auto& drive : config_.drives) {
         SetJointDisabled(drive.id);
@@ -792,7 +810,9 @@ bool Hardware::setDriverStates(size_t begin, size_t end, DriveState targetState)
     }
 
     // 统一等待，超时不再随驱动器数量累加。
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(150);
+    const auto timeout = std::chrono::milliseconds(
+        targetState == DriveState::OperationEnabled ? 250 : 150);
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
     while (true) {
         {
             std::lock_guard<std::mutex> lock(sm_mutex_);

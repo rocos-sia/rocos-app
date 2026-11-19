@@ -216,6 +216,7 @@ public:
     void SetTorque(const JntArray& tau) override;
     void SetMode(int8_t mode) override;
     void SetEnabled() override;
+    void LogDriveStatus() const;
     void SetDisabled() override;
     JntState GetState() override;
 
