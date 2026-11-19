@@ -268,3 +268,22 @@ python3 dualarm/tests/integration_mujoco.py --tool-packages \
 
 本地 Apifox 契约：同级 `rocos-mujoco/dualarm-openapi.yaml`。未上传在线项目。
 页面：同级 `rocos-viz/design/dualarm/v2`，日志连接真实诊断端口，运动/标定仍为交互预案。
+
+## 肩部基坐标系试验配置
+
+`--config dualarm/config/app_shoulder.yaml` 选择 `left_base → Left_Link7` 与
+`right_base → Right_Link7`；原 `app.yaml` 继续使用公共 `base_link`。
+两条链各七轴，设备数据、工具库与日志目录单独隔离。API 路径与主站 ID 不变。
+法兰/TCP 反馈和笛卡尔目标按各臂配置中的基坐标表达；先通过 `/api/arms` 的
+`base_link` 确认当前方案。`MoveJ_IK` 是法兰目标；`MoveL` 是所选工具目标。
+旧工件坐标与笛卡尔目标须转换，不能直接复用；法兰相对 TCP 与负载质心保持原定义。
+详见同级 [MuJoCo 肩部试验说明](../../rocos-mujoco/config/dualarm/SHOULDER_TRIAL.md)。
+
+可执行 `python3 dualarm/tests/integration_mujoco.py --shoulder --output build/dualarm-shoulder/integration`
+进行完整仿真联调。它自行启动两个进程，要求主站 0/1、端口 8080/8082 空闲，结果写入指定目录。
+
+## 使能保持
+
+位置模式每次使能前都会校验当前反馈、重新写入当前位置作为 CSP 目标并建立新的保持指令；准备失败则保持驱动未使能并进入错误状态。旧的未执行目标不会在使能时自动恢复，应在使能成功后再下发 MoveJ。正常运动完成后仍保持最终下发目标。该逻辑位于复用的 Robot 核心，单臂和双臂入口行为一致。
+
+配套 MuJoCo 的双臂模型采用 `kp=20000`、`kv=500`、无执行器力矩限幅，未使能采用理想运动学抱闸。更新后二进制与模型需重启 App 和 MuJoCo 才生效。

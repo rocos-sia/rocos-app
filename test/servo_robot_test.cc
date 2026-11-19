@@ -279,32 +279,45 @@ TEST_CASE("MoveJ completion holds the last submitted position despite feedback l
           1000 + static_cast<int32_t>(std::llround(direction * .004 * 200000)));
 }
 
-TEST_CASE("CSP enable holds Target Position while disabled state follows feedback") {
+TEST_CASE("CSP enable synchronizes feedback before activation and discards stale holds") {
     OfflineMaster offline;
     rocos::Robot robot(offline.config());
     auto target = robot.hardware->GetPosition();
-    target(0) = .002;
+    target(0) = .2;
     robot.hardware->SetPosition(target);
-
+    const auto initial = robot.hardware->GetPosition();
+    offline.follow_targets = true;  // A stale target would immediately move feedback.
     REQUIRE(robot.SetEnabled() == Result::NoError);
     std::this_thread::sleep_for(std::chrono::milliseconds(30));
     REQUIRE(robot.GetStateString() == "STOPPED");
-    CHECK(robot.hardware->GetCmdPosition()(0) == doctest::Approx(.002));
+    CHECK(robot.hardware->GetCmdPosition().data.isApprox(initial.data, 1e-12));
+    CHECK(robot.hardware->GetPosition().data.isApprox(initial.data, 1e-12));
 
-    REQUIRE(robot.SetDisabled() == Result::NoError);
-    REQUIRE(robot.GetStateString() == "IDLE");
-    // 下使能后反馈发生变化，查询应读取新反馈，PDO 目标仍保留原值。
-    offline.master.setSlaveInputVarValue<int32_t>(0, 1, 1200);
-    const auto state = robot.GetRobotStateSnapshot();
-    CHECK_FALSE(state.is_enabled);
-    REQUIRE(state.joints.size() == 2);
-    CHECK(state.joints[0].position == doctest::Approx(.001));
-    CHECK(robot.hardware->GetCmdPosition()(0) == doctest::Approx(.002));
+    for (int cycle = 0; cycle < 3; ++cycle) {
+        REQUIRE(robot.SetDisabled() == Result::NoError);
+        REQUIRE(robot.GetStateString() == "IDLE");
+        // Feedback changed while disabled; old commands and MoveHold must not return.
+        offline.master.setSlaveInputVarValue<int32_t>(0, 1, 100000 + cycle * 10000);
+        offline.master.setSlaveInputVarValue<int32_t>(1, 1, -50000 - cycle * 10000);
+        const auto actual = robot.hardware->GetPosition();
+        REQUIRE(robot.SetEnabled() == Result::NoError);
+        std::this_thread::sleep_for(std::chrono::milliseconds(30));
+        CHECK(robot.GetStateString() == "STOPPED");
+        CHECK(robot.hardware->GetCmdPosition().data.isApprox(actual.data, 1e-12));
+        CHECK(robot.hardware->GetPosition().data.isApprox(actual.data, 1e-12));
+    }
+}
 
-    REQUIRE(robot.SetEnabled() == Result::NoError);
-    std::this_thread::sleep_for(std::chrono::milliseconds(30));
-    CHECK(robot.GetStateString() == "STOPPED");
-    CHECK(robot.hardware->GetCmdPosition()(0) == doctest::Approx(.002));
+TEST_CASE("CSP enable rejects invalid feedback before drive activation") {
+    OfflineMaster offline;
+    rocos::Robot robot(offline.config());
+    offline.master.setSlaveInputVarValue<int32_t>(0, 1, 1000000000);
+    (void)robot.SetEnabled();
+    CHECK(robot.GetStateString() == "ERROR_STATE");
+    CHECK_FALSE(robot.IsEnabled());
+    for (int i = 0; i < 2; ++i) {
+        CHECK((offline.master.getSlaveOutputVarValue<uint16_t>(i, 0) & 0x8f) != 0x0f);
+    }
 }
 
 TEST_CASE("librocos actual HTTP and UDP joint servo with offline master") {

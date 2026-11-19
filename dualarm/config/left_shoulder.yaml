@@ -1,0 +1,7 @@
+# Reuse the sibling MuJoCo robot/hardware model, with separate device data.
+schema_version: 1
+robot_config: ../../../rocos-mujoco/config/dualarm/app/robot_left_shoulder.yaml
+device_config: devices/shoulder/left/device.yaml
+tool_library: ../../build/dualarm-shoulder/tools/left
+scripts: ../../scripts
+web_root: ../../web

@@ -24,3 +24,20 @@ add_test(NAME dualarm_config_test COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_CURRENT_SOURCE_DIR}/tests/config_test.py $<TARGET_FILE:rocosDualArmMain>
     ${CMAKE_CURRENT_SOURCE_DIR}/config/app.yaml)
 set_tests_properties(dualarm_config_test PROPERTIES TIMEOUT 40)
+
+# Optional sibling model integration; all tests are offline (no master access).
+set(ROCOS_DUALARM_MODEL_DIR "${PROJECT_SOURCE_DIR}/../rocos-mujoco/config/dualarm/urdf"
+    CACHE PATH "Dual-arm URDF directory for shoulder coordinate regression")
+if(EXISTS "${ROCOS_DUALARM_MODEL_DIR}/dualarm_shoulder.urdf")
+    add_executable(dualarm_shoulder_model_test tests/shoulder_model_test.cpp)
+    target_include_directories(dualarm_shoulder_model_test PRIVATE
+        ${PROJECT_SOURCE_DIR}/src ${PROJECT_SOURCE_DIR}/test)
+    target_compile_definitions(dualarm_shoulder_model_test PRIVATE
+        ROCOS_DUALARM_MODEL_DIR="${ROCOS_DUALARM_MODEL_DIR}")
+    target_link_libraries(dualarm_shoulder_model_test PRIVATE rocos::robot)
+    add_test(NAME dualarm_shoulder_model COMMAND dualarm_shoulder_model_test)
+    set_tests_properties(dualarm_shoulder_model PROPERTIES TIMEOUT 60)
+    add_test(NAME dualarm_shoulder_config COMMAND rocosDualArmMain
+        --config ${CMAKE_CURRENT_SOURCE_DIR}/config/app_shoulder.yaml --check_config)
+    set_tests_properties(dualarm_shoulder_config PROPERTIES TIMEOUT 30)
+endif()

@@ -111,7 +111,11 @@ def main():
                         help='Exercise configured package calibration with six valid simulated poses')
     parser.add_argument('--basic-motion', action='store_true',
                         help='Focus on independent MoveJ, control rights, calibration and logging; skip the extended IK/jog suite')
+    parser.add_argument('--shoulder', action='store_true',
+                        help='Use the opt-in shoulder-v1 bases, preserving seven axes')
     args = parser.parse_args()
+    suffix = '_shoulder' if args.shoulder else ''
+    urdf_name = f'dualarm{suffix}.urdf'
     sim_duration = 120 if args.tool_packages else 65
     args.app = args.app.resolve()
     args.sim = args.sim.resolve()
@@ -124,7 +128,7 @@ def main():
             sock.bind(('127.0.0.1', port))
     args.output.mkdir(parents=True, exist_ok=True)
     logs, app, sim = [], None, None
-    report = {'passed': False, 'checks': [], 'app_binary': str(args.app), 'motion_suite': 'basic' if args.basic_motion else 'extended'}
+    report = {'passed': False, 'checks': [], 'app_binary': str(args.app), 'motion_suite': 'basic' if args.basic_motion else 'extended', 'coordinate_profile': 'shoulder-v1' if args.shoulder else 'legacy'}
     arms = [Arm('left'), Arm('right')]
 
     def start(name, command):
@@ -133,11 +137,11 @@ def main():
         return subprocess.Popen([str(x) for x in command], cwd=ROOT, stdout=log, stderr=subprocess.STDOUT)
 
     try:
-        subprocess.run([str(args.app), '--config', str(ROOT / 'dualarm/config/app.yaml'), '--check_config'],
+        subprocess.run([str(args.app), '--config', str(ROOT / f'dualarm/config/app{suffix}.yaml'), '--check_config'],
                        check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=15)
         model = ROOT.parent / 'rocos-mujoco/config/dualarm'
         config = args.output / 'simulation.json'
-        config.write_text(json.dumps({'model': str(model / 'mjcf/scene.xml'), 'masters': [
+        config.write_text(json.dumps({'model': str(model / f'mjcf/scene{suffix}.xml'), 'masters': [
             {'ecat_id': i, 'hardware_config': str(model / f'hardware_{side}.yaml')}
             for i, side in enumerate(('left', 'right'))], 'cycle_time_us': 1000,
             'duration_sec': sim_duration, 'visualize': False}))
@@ -148,7 +152,7 @@ def main():
             for filename in ('frames.yaml', 'identification/payload.yaml'):
                 (device_dir / filename).unlink(missing_ok=True)
             device = {'schema_version': 1, 'id': f'dualarm_integration_{side}',
-                      'expected_robot': {'name': f'dualarm_{side}', 'package_version': '1.0.0'}}
+                      'expected_robot': {'name': f'dualarm_{side}' + ('_shoulder_v1' if args.shoulder else ''), 'package_version': '1.0.0'}}
             if args.tool_packages:
                 source = device_dir / 'package-source'
                 source.mkdir(exist_ok=True)
@@ -158,13 +162,13 @@ def main():
                 device['tool_install'] = {'parent_link': f'{side.title()}_Link7',
                     'position': [0.02, 0.01, 0.03], 'orientation': [0, 0, math.sin(0.15), math.cos(0.15)]}
             (device_dir / 'device.json').write_text(json.dumps(device))
-            child = {'schema_version': 1, 'robot_config': str(model / f'app/robot_{side}.yaml'),
+            child = {'schema_version': 1, 'robot_config': str(model / f'app/robot_{side}{suffix}.yaml'),
                      'device_config': str(device_dir / 'device.json'), 'tool_library': str(device_dir / 'tools'),
                      'scripts': str(ROOT / 'scripts'), 'web_root': str(ROOT / 'web')}
             (args.output / f'{side}.json').write_text(json.dumps(child))
         app_config = args.output / 'app.json'
         app_config.write_text(json.dumps({'schema_version': 1,
-            'workcell': {'urdf': str(model / 'urdf/dualarm.urdf'), 'asset_root': str(model)},
+            'workcell': {'urdf': str(model / 'urdf' / urdf_name), 'asset_root': str(model)},
             'arms': {side: {'config': f'{side}.json'} for side in ('left', 'right')},
             'logging': {'directory': str(args.output / 'logs')}}))
         sim = start('simulator', [args.sim, '--config', config])
@@ -184,6 +188,7 @@ def main():
         listing = wait_for(ready, 15)
         assert [a['ecat_id'] for a in listing['arms']] == [0, 1]
         assert [a['joint_count'] for a in listing['arms']] == [7, 7]
+        assert [a['base_link'] for a in listing['arms']] == (['left_base', 'right_base'] if args.shoulder else ['base_link', 'base_link'])
         report['pids'] = {'app': app.pid, 'simulator': sim.pid}
         report['checks'].append('one App exposes two independent 7-axis Robots')
         for arm in arms:
@@ -192,7 +197,7 @@ def main():
             assert not arm.request('robot/move_status')['is_running']
             arm.acquire()
         left, right = arms
-        check_models(call, OPENER, model, report)
+        check_models(call, OPENER, model, report, urdf_name)
         check_frames(arms, call, OPENER, report)
         assert left.headers['X-Rocos-Control-Token'] != right.headers['X-Rocos-Control-Token']
         busy = left.request('control/acquire', {'client_id': 'another-client'}, 3008)

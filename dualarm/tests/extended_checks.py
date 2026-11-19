@@ -7,7 +7,7 @@ import urllib.parse
 import urllib.request
 
 
-def check_models(call, opener, model_root, report):
+def check_models(call, opener, model_root, report, urdf_name='dualarm.urdf'):
     data = call('/api/workcell/model')
     assert [a['arm'] for a in data['arms']] == ['left', 'right']
     assert len(set(sum([a['joint_names'] for a in data['arms']], []))) == 14
@@ -16,7 +16,7 @@ def check_models(call, opener, model_root, report):
     with opener.open(base + data['urdf_url']) as response:
         xml, etag = response.read(), response.headers['ETag']
         assert 'xml' in response.headers['Content-Type']
-    assert xml == (model_root / 'urdf/dualarm.urdf').read_bytes()
+    assert xml == (model_root / 'urdf' / urdf_name).read_bytes()
     for arm in ('left', 'right'):
         with opener.open(base + f'/api/arms/{arm}/robot/urdf') as response:
             assert response.read() == xml

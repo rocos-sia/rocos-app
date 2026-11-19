@@ -308,6 +308,31 @@ namespace rocos {
     void Robot::on_fsm_enabling() {
         log_ptr_->info("Robot enable requested.");
 
+        // Position mode must establish a fresh hold before releasing the drives.
+        // Reset also discards the previous command's velocity-check baseline.
+        if (work_mode_ == "position") {
+            Result ready = Result::Fatal;
+            try {
+                std::lock_guard<std::mutex> lock(mtx_);
+                if (controller && controller->Reset()) {
+                    ready = controller->SetReady();
+                    if (ready == Result::NoError) {
+                        motion = std::make_unique<MoveHold>(hardware->GetCmdPosition());
+                        executor->SwitchMotion(motion.get());
+                    }
+                }
+            } catch (const std::exception& error) {
+                ready = Result::Fatal;
+                log_ptr_->error("Enable hold preparation failed: {}", error.what());
+            }
+            if (ready != Result::NoError) {
+                log_ptr_->error("Enable rejected before drive activation: hold preparation result={}",
+                                static_cast<int>(ready));
+                impl_->process_event(EventErrorOccurred{});
+                return;
+            }
+        }
+
         setEnabled();
 
         if (IsEnabled()) {
@@ -894,11 +919,11 @@ namespace rocos {
     Result Robot::SetEnabled() {
         log_ptr_->info("Enable command received.");
 
-        //TODO: 代码清理 by think
-        // if (impl_->is(sml::state<class IDLE>) ||
-        //     impl_->is(sml::state<class ERROR_STATE>)) {
-        //     stopControlThread();
-        // }
+        auto command_lock = LockToolState();
+        // Drain the previous disabled cycle before resetting the controller.
+        // Do not join under the FSM lock: the old thread needs it to observe
+        // IDLE and exit. Joining inside ENABLING can deadlock on rapid re-enable.
+        if (impl_->is(sml::state<class IDLE>)) stopControlThread();
 
         if (!impl_->process_event(EventEnableReq{})) {
             log_ptr_->error("Enable command rejected in the current robot state.");
