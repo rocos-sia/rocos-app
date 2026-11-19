@@ -34,6 +34,8 @@ class CalibrationSessions {
     uint64_t package_revision = 0;
     std::array<std::optional<ToolCalibrationSample>, 6> samples;
     std::optional<ToolCalibrationSolution> result;
+    bool saved = false;
+    double max_error = 0.001;
   };
   Session& Owned(const std::string& id, const std::string& owner);
   static Json Serialize(const Session& session);

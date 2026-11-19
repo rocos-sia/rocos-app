@@ -90,6 +90,7 @@ Json CalibrationSessions::CapturePoint(const Json& body,
   CheckContext(session, lookup);
   session.samples[index - 1] = std::move(sample);
   session.result.reset();
+  session.saved = false;
   return Serialize(session);
 }
 
@@ -101,6 +102,8 @@ Json CalibrationSessions::Calculate(const Json& body, const std::string& owner,
     throw ApiError(1001, "max_error must be in (0, 0.05] metres");
   auto& session = Owned(id, owner);
   session.result.reset();
+  session.saved = false;
+  session.max_error = tolerance;
   CheckContext(session, lookup);
   std::array<Frame, 6> poses;
   for (size_t i = 0; i < poses.size(); ++i) {
@@ -148,6 +151,7 @@ void CalibrationSessions::Save(const Json& body, const std::string& owner,
   if (result != Result::NoError)
     throw ApiError(static_cast<int>(result), "Cannot persist tool calibration");
   session.package_revision = saved_revision;
+  session.saved = true;
 }
 
 void CalibrationSessions::CheckContext(Session& session, const Lookup& lookup) {
@@ -192,6 +196,8 @@ Json CalibrationSessions::Serialize(const Session& session) {
           {"samples", samples},
           {"captured", count},
           {"result", result},
+          {"saved", session.saved && session.result.has_value()},
+          {"max_error", session.max_error},
           {"package_digest", session.package_digest},
           {"package_revision", session.package_revision}};
 }

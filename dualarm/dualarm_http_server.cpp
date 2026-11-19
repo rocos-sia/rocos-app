@@ -1,5 +1,8 @@
 #include "dualarm_http_server.hpp"
 
+#include <openssl/rand.h>
+
+#include <array>
 #include <cmath>
 #include <set>
 #include <stdexcept>
@@ -11,6 +14,18 @@
 namespace rocos::dualarm {
 namespace {
 using Json = nlohmann::json;
+std::string InstanceId() {
+  std::array<unsigned char, 16> bytes{};
+  if (RAND_bytes(bytes.data(), bytes.size()) != 1)
+    throw std::runtime_error("Cannot create App instance identifier");
+  const char* hex = "0123456789abcdef";
+  std::string id;
+  for (const auto byte : bytes) {
+    id += hex[byte >> 4];
+    id += hex[byte & 15];
+  }
+  return id;
+}
 void Reply(httplib::Response& res, bool success, int code,
            const std::string& message, const Json& data = nullptr) {
   res.set_content(Json{{"success", success},
@@ -80,7 +95,7 @@ Json State(Robot& robot) {
 }  // namespace
 
 DualArmHttpServer::DualArmHttpServer(DualArmController& controller)
-    : controller_(controller) {
+    : controller_(controller), instance_id_(InstanceId()) {
   const auto& config = controller.Config();
   if (!config.model_urdf.empty())
     model_ = std::make_unique<ModelBundle>(config.model_urdf,
@@ -216,6 +231,7 @@ void DualArmHttpServer::Handle(const httplib::Request& req,
     }
     Reply(res, true, 0, "ok",
           {{"execution_mode", "independent"},
+           {"instance_id", instance_id_},
            {"arms", arms},
            {"model_url", model_ ? Json("/api/workcell/model") : Json(nullptr)},
            {"capabilities",
@@ -225,15 +241,17 @@ void DualArmHttpServer::Handle(const httplib::Request& req,
              {"six_point_calibration", true},
              {"tool_package_calibration", true},
              {"tool_packages", false},
+             {"command_protocol", 1},
              {"synchronized_motion", false}}}});
     return;
   }
   const std::string side = req.matches[1], group = req.matches[2],
                     action = req.matches[3];
   const std::set<std::string> robot_get{
-      "state",        "info",        "move_status",   "enabled",
-      "tcp",          "tool_frames", "object_frames", "tool_frame",
-      "object_frame", "load_params", "urdf",          "urdf/mesh"};
+      "state",          "info",         "move_status", "enabled",
+      "command_status", "tcp",          "tool_frames", "object_frames",
+      "tool_frame",     "object_frame", "load_params", "urdf",
+      "urdf/mesh"};
   const std::set<std::string> robot_post{"enable",
                                          "disable",
                                          "reset",
@@ -282,14 +300,39 @@ void DualArmHttpServer::Handle(const httplib::Request& req,
   const size_t index = side == "left" ? 0 : 1;
   auto& robot = controller_.Arm(index);
   auto& context = controller_.Context(index);
+  if (group == "robot" && req.method == "GET" && action == "command_status") {
+    std::lock_guard<std::mutex> command_lock(context.command_mutex);
+    const auto owner = req.get_header_value("X-Rocos-Control-Token");
+    const auto auth = context.lease.Authorize(
+        owner, req.get_header_value("X-Rocos-Client-Id"));
+    if (auth) {
+      Reply(res, false, auth,
+            "Invalid or missing control credentials for selected arm");
+      return;
+    }
+    std::lock_guard<std::mutex> status_lock(context.status_mutex);
+    context.commands.Observe(State(robot));
+    auto data = context.commands.Metadata(instance_id_);
+    data["command"] =
+        context.commands.Read(req.get_param_value("command_id"), owner);
+    Reply(res, true, 0, "ok", data);
+    return;
+  }
   if (group == "robot" && req.method == "GET") {
     if (action == "urdf" || action == "urdf/mesh") {
       HandleModel(req, res, action);
       return;
     }
-    if (action == "state")
-      Reply(res, true, 0, "ok", State(robot));
-    else if (action == "info")
+    if (action == "state") {
+      // Serialize publication with acceptance/stop metadata, independently of
+      // slow arm command dispatch. A planning record cannot finish on idle
+      // data.
+      std::lock_guard<std::mutex> lock(context.status_mutex);
+      auto data = State(robot);
+      context.commands.Observe(data);
+      data.update(context.commands.Metadata(instance_id_));
+      Reply(res, true, 0, "ok", data);
+    } else if (action == "info")
       Reply(res, true, 0, "ok", robotInfoJson(robot.GetJointInfo()));
     else if (action == "move_status") {
       const auto snap = robot.GetRobotStateSnapshot();
@@ -317,18 +360,29 @@ void DualArmHttpServer::Handle(const httplib::Request& req,
     return;
   }
   if (group == "control" && action == "status") {
-    Reply(res, true, 0, "ok", context.lease.Status());
+    auto data = context.lease.Status();
+    std::lock_guard<std::mutex> status_lock(context.status_mutex);
+    data.update(context.commands.Metadata(instance_id_));
+    Reply(res, true, 0, "ok", data);
     return;
   }
   if (group == "control" && action == "acquire") {
     const auto body = Body(req);
+    if (body.contains("command_protocol") &&
+        !body["command_protocol"].is_number_integer())
+      throw std::invalid_argument("command_protocol must be an integer");
     auto client = req.get_header_value("X-Rocos-Client-Id");
     if (client.empty()) client = String(body, "client_id");
     if (client.size() > 256) throw std::invalid_argument("Invalid client_id");
     Json data;
     const bool acquired = context.lease.Acquire(
         client, String(body, "client_name"), req.remote_addr, req.remote_port,
-        req.get_header_value("User-Agent"), data);
+        req.get_header_value("User-Agent"), data, ControlLease::Clock::now(),
+        body.value("command_protocol", 0));
+    {
+      std::lock_guard<std::mutex> status_lock(context.status_mutex);
+      data.update(context.commands.Metadata(instance_id_));
+    }
     Reply(res, acquired, acquired ? 0 : 3008,
           acquired ? "control acquired"
                    : "control already held by another client",
@@ -344,8 +398,21 @@ void DualArmHttpServer::Handle(const httplib::Request& req,
     return;
   }
   if (group == "control") {
+    if (action == "heartbeat") {
+      const auto body = Body(req);
+      if (body.contains("command_protocol")) {
+        if (!body["command_protocol"].is_number_integer() ||
+            body["command_protocol"] != 1)
+          throw std::invalid_argument(
+              "Heartbeat can only upgrade command_protocol to 1");
+        context.lease.EnableCommandProtocol();
+      }
+    }
     if (action == "release") context.lease.Release();
-    Reply(res, true, 0, "ok", context.lease.Status());
+    auto data = context.lease.Status();
+    std::lock_guard<std::mutex> status_lock(context.status_mutex);
+    data.update(context.commands.Metadata(instance_id_));
+    Reply(res, true, 0, "ok", data);
     return;
   }
   if (group == "calibration") {
@@ -402,28 +469,85 @@ void DualArmHttpServer::Handle(const httplib::Request& req,
     return;
   }
   Result result = Result::NoError;
-  if (action == "movej" || action == "movej_ik" || action == "movel" ||
-      action == "movel_fk" || action.rfind("jog/", 0) == 0) {
-    result = ExecuteMotion(robot, action, Body(req));
-  } else if (action == "enable")
-    result = robot.SetEnabled();
-  else if (action == "disable")
-    result = robot.SetDisabled();
-  else if (action == "reset")
-    result = robot.ResetFault();
-  else if (action == "pause")
-    result = robot.PauseMotion();
-  else if (action == "resume")
-    result = robot.ResumeMotion();
-  else if (action == "stop")
-    result = robot.StopMotion();
+  const auto body = Body(req);
+  const bool precise = action == "movej" || action == "movej_ik" ||
+                       action == "movel" || action == "movel_fk";
+  const bool stop = action == "stop" || action == "jog/stop";
+  std::string command_id;
+  if (stop) {
+    if ((context.lease.CommandProtocol() == 1 ||
+         body.contains("instance_id")) &&
+        body.value("instance_id", std::string()) != instance_id_)
+      throw ApiError(4105, "Stop requires the current App instance_id");
+    // Invalidate queued and delayed old requests even when the arm is idle.
+    std::lock_guard<std::mutex> status_lock(context.status_mutex);
+    context.commands.Stop();
+  } else if (precise || action.rfind("jog/", 0) == 0) {
+    std::lock_guard<std::mutex> status_lock(context.status_mutex);
+    const bool guarded = context.commands.Validate(
+        body, instance_id_, context.lease.CommandProtocol() == 1, precise);
+    if (guarded && precise) {
+      command_id = body.at("command_id").get<std::string>();
+      if (!context.commands.Begin(
+              body, action, req.get_header_value("X-Rocos-Control-Token"))) {
+        const auto previous = context.commands.Read(
+            command_id, req.get_header_value("X-Rocos-Control-Token"));
+        auto data = context.commands.Metadata(instance_id_);
+        data["command"] = previous;
+        Reply(res, previous.at("success"), previous.at("code"),
+              previous.at("message"), data);
+        return;
+      }
+    }
+  }
+  const auto finish = [&](bool success, int code, const std::string& message) {
+    if (command_id.empty()) return;
+    std::lock_guard<std::mutex> status_lock(context.status_mutex);
+    context.commands.Finish(command_id, success, code, message);
+  };
+  try {
+    if (stop) {
+      // An idle stop is a successful cancellation fence, not an unsupported FSM
+      // transition. It also covers precise requests that have not arrived yet.
+      result = robot.IsMotionBusy() ? robot.StopMotion() : Result::NoError;
+    } else if (precise || action.rfind("jog/", 0) == 0) {
+      result = ExecuteMotion(robot, action, body);
+    } else if (action == "enable")
+      result = robot.SetEnabled();
+    else if (action == "disable")
+      result = robot.SetDisabled();
+    else if (action == "reset")
+      result = robot.ResetFault();
+    else if (action == "pause")
+      result = robot.PauseMotion();
+    else if (action == "resume")
+      result = robot.ResumeMotion();
+  } catch (const ApiError& error) {
+    finish(false, error.code, error.what());
+    throw;
+  } catch (const Json::exception&) {
+    finish(false, 1001, "Invalid JSON field type");
+    throw;
+  } catch (const std::invalid_argument& error) {
+    finish(false, 1001, error.what());
+    throw;
+  } catch (...) {
+    finish(false, -3001, "Dual-arm request failed");
+    throw;
+  }
   const bool success =
       result == Result::NoError || result == Result::PlanFinished;
+  finish(success, static_cast<int>(result),
+         success ? action + " accepted" : action + " failed");
   Json data{{"robot_state", robot.GetStateString()}};
   if (action == "enable" || action == "disable" || action == "reset")
     data["enabled"] = robot.IsEnabled();
   else
     data["control_active"] = robot.IsControlActive();
+  {
+    std::lock_guard<std::mutex> status_lock(context.status_mutex);
+    data.update(context.commands.Metadata(instance_id_));
+  }
   Reply(res, success, static_cast<int>(result),
         success ? action + " accepted" : action + " failed", data);
 }

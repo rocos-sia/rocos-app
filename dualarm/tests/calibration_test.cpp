@@ -234,6 +234,8 @@ TEST_CASE("six points solve and persist only the selected ordinary tool") {
   });
   const auto result = left.Calculate({{"session_id", id}}, "owner");
   CHECK(result["captured"] == 6);
+  CHECK(result["saved"] == false);
+  CHECK(result["max_error"] == doctest::Approx(0.001));
   CHECK(Equal(ParsePose(result["result"]["pose"]), expected, 1e-9));
   CHECK(result["result"]["metrics"]["max_error"].get<double>() < 1e-12);
   CHECK(left_frames.snapshot()->tools.count("tcp") == 0);
@@ -244,6 +246,7 @@ TEST_CASE("six points solve and persist only the selected ordinary tool") {
                                                  revision, saved_revision);
             });
   FrameRegistry reloaded((root / "left.yaml").string());
+  CHECK(left.Read(id)["saved"] == true);
   REQUIRE(reloaded.load() == Result::NoError);
   Frame actual;
   REQUIRE(reloaded.get("tcp", true, actual) == Result::NoError);
@@ -287,6 +290,7 @@ TEST_CASE("recapture and failed recalculation cannot save an old result") {
   sessions.CapturePoint({{"name", "tcp"}, {"index", 1}, {"session_id", id}},
                         "owner", Capture(points[0]));
   CHECK(sessions.Read(id)["result"].is_null());
+  CHECK(sessions.Read(id)["saved"] == false);
   sessions.Calculate({{"session_id", id}}, "owner");
   Error(4002, [&] {
     sessions.Calculate({{"session_id", id}, {"max_error", 1e-8}}, "owner");

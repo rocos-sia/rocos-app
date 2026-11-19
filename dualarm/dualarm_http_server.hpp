@@ -21,6 +21,7 @@ class DualArmHttpServer {
                    const std::string& action);
   DualArmController& controller_;
   std::unique_ptr<ModelBundle> model_;
+  std::string instance_id_;
   httplib::Server server_;
   std::thread thread_;
   std::atomic<bool> running_{false};

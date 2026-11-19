@@ -1,7 +1,7 @@
 add_library(rocos_dualarm STATIC
     dualarm_config.cpp dualarm_controller.cpp arm_api_context.cpp
     dualarm_http_server.cpp arm_operations.cpp model_bundle.cpp
-    calibration_sessions.cpp)
+    calibration_sessions.cpp motion_commands.cpp)
 target_include_directories(rocos_dualarm PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}
     ${PROJECT_SOURCE_DIR}/src
     PRIVATE ${PROJECT_BINARY_DIR})

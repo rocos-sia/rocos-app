@@ -33,6 +33,7 @@ void ControlLease::Release() {
   ip_.clear();
   agent_.clear();
   port_ = 0;
+  command_protocol_ = 0;
 }
 nlohmann::json ControlLease::Status(Clock::time_point now) {
   Expire(now);
@@ -56,11 +57,14 @@ nlohmann::json ControlLease::Status(Clock::time_point now) {
           {"idle_seconds", idle},
           {"expires_in_seconds", held ? std::max<int64_t>(0, ttl_ - idle) : 0},
           {"ttl_seconds", ttl_},
+          {"command_protocol", command_protocol_},
           {"heartbeat_interval_seconds", std::min(5.0, ttl_ / 3.0)}};
 }
 bool ControlLease::Acquire(std::string client, std::string name, std::string ip,
                            int port, std::string agent, nlohmann::json& data,
-                           Clock::time_point now) {
+                           Clock::time_point now, int command_protocol) {
+  if (command_protocol != 0 && command_protocol != 1)
+    throw std::invalid_argument("Unsupported command_protocol");
   Expire(now);
   if (!token_.empty()) {
     data = Status(now);
@@ -75,6 +79,7 @@ bool ControlLease::Acquire(std::string client, std::string name, std::string ip,
   ip_ = std::move(ip);
   port_ = port;
   agent_ = std::move(agent);
+  command_protocol_ = command_protocol;
   acquired_ = last_seen_ = now;
   data = Status(now);
   data["token"] = token_;

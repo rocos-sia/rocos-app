@@ -287,3 +287,38 @@ python3 dualarm/tests/integration_mujoco.py --tool-packages \
 位置模式每次使能前都会校验当前反馈、重新写入当前位置作为 CSP 目标并建立新的保持指令；准备失败则保持驱动未使能并进入错误状态。旧的未执行目标不会在使能时自动恢复，应在使能成功后再下发 MoveJ。正常运动完成后仍保持最终下发目标。该逻辑位于复用的 Robot 核心，单臂和双臂入口行为一致。
 
 配套 MuJoCo 的双臂模型采用 `kp=20000`、`kv=500`、无执行器力矩限幅，未使能采用理想运动学抱闸。更新后二进制与模型需重启 App 和 MuJoCo 才生效。
+
+## 命令追踪与停止代次
+
+新双臂页面通过 `control/acquire` 或 `control/heartbeat` 的
+`command_protocol: 1` 启用防护。运动请求必须携带当前 `instance_id` 和
+`motion_epoch`，四种精确运动另带唯一 `command_id`。同一 ID 的相同请求只受理一次；
+改变请求体返回 4102。每代次最多保留 256 条记录，满时返回 4104；停止提升代次后
+可清理旧代次记录，旧代次请求仍不能重新执行。
+
+`robot/stop`、`robot/jog/stop` 在本臂锁内先提升代次，再停止当前运动；空闲时也
+建立取消屏障。协议 1 的停止须提交当前 `instance_id`，无需匹配旧代次。
+停止响应仅代表受理，必须结合新 `state_seq` 和静止反馈确认。
+另一臂的代次、命令记录和运动不受影响。未协商的旧双臂客户端保留原格式，
+单臂 HTTP 接口和 Robot 核心不变；旧格式没有请求代次防护。
+
+`robot/state` 返回 `instance_id / motion_epoch / state_seq / command`。
+`GET robot/command_status?command_id=...` 使用本臂 token 与 client ID，查询成功会
+续期控制权；独立查询也会采样并推进命令状态。4103 表示结果不可确认，不能据此
+推断未执行或自动重发。`finished` 表示受理后观察到静止，目标到位仍需校验偏差。
+墙上时间 `timestamp` 只用于显示；状态排序以实例和序号为准。
+
+标定回读增加服务端 `saved` 和计算阈值 `max_error`。浏览器可在同一实例、同一
+控制会话中保存标定 ID 并回读采点；App 重启后未保存的内存会话失效。
+本地协议见同级 MuJoCo 的 `dualarm-openapi.yaml`，版本 `0.5.0-local`。
+
+隔离回归使用独立主站 ID、临时端口和构建目录设备文件，并在结束后清理进程及 IPC：
+
+```bash
+python3 dualarm/tests/command_integration.py \
+  --browser ../rocos-viz/design/dualarm/v2/check-command-recovery.mjs \
+  --browser ../rocos-viz/design/dualarm/v2/check-features.mjs \
+  --browser ../rocos-viz/design/dualarm/v2/check-motion-layout.mjs
+```
+
+执行前须构建 `rocosDualArmMain`、同级 MuJoCo 的 headless 模拟器和 Viz 双臂页面。
