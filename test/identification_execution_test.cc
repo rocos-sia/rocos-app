@@ -7,10 +7,11 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <set>
 #include <sstream>
 #include <thread>
 
-#include "src/hardware.hpp"
+#include "examples/dynamics_id/friction_sweep_trajectory.hpp"
 #include "test/doctest.h"
 
 namespace {
@@ -24,8 +25,9 @@ struct OfflineMaster {
     rocos::SharedMemoryConfig master{id};
     const std::filesystem::path directory =
         std::filesystem::temp_directory_path() / ("rocos-identification-" + std::to_string(id));
-    bool enabled = false, positionMoved = false, torqueWritten = false;
-    std::vector<int32_t> targetsBeforeGap;
+    bool enabled = false, positionMoved = false, otherJointMoved = false, torqueWritten = false;
+    bool delayedPositionCycle = false;
+    double secondsBeforeFirstPositionMove = 0;
     bool cspEnabled = false, disabledBeforeCst = false, cstRequested = false;
     double secondsBeforeCst = 0;
     int16_t torqueBeforeCst = 0, firstCstTorque = 0;
@@ -66,12 +68,15 @@ struct OfflineMaster {
         v.size = size;
     }
     int run(bool impedance, bool loseCycles = false, bool delayPositionCycle = false,
-            bool rejectCst = false) {
+            const std::string& frictionProtocol = {}, bool rejectCst = false) {
         const std::string output = (directory / "measurements.csv").string();
         std::vector<std::string> args;
         if (impedance) {
             args = {IMPEDANCE_EXECUTABLE, "--config=" IDENTIFICATION_TEST_DATA "/controller.yaml",
                     "--duration=.08"};
+        } else if (!frictionProtocol.empty()) {
+            args = {ACQUISITION_EXECUTABLE, "--hardware=" IDENTIFICATION_TEST_DATA "/hardware.yaml",
+                    "--friction_protocol=" + frictionProtocol};
         } else {
             args = {ACQUISITION_EXECUTABLE, "--hardware=" IDENTIFICATION_TEST_DATA "/hardware.yaml",
                     "--trajectory=" IDENTIFICATION_TEST_DATA "/trajectory.json", "--loops=1"};
@@ -132,7 +137,12 @@ struct OfflineMaster {
                     enabled = true;
                     if (mode == 8) {
                         const auto target = master.getSlaveOutputVarValue<int32_t>(i, 2);
-                        positionMoved |= target != (i ? -500 : 1000);
+                        if (!positionMoved && target != (i ? -500 : 1000)) {
+                            positionMoved = true;
+                            secondsBeforeFirstPositionMove =
+                                std::chrono::duration<double>(std::chrono::steady_clock::now() - enabledAt).count();
+                        }
+                        if (i == 1) otherJointMoved |= target != -500;
                         master.setSlaveInputVarValue<int32_t>(i, 1, target);
                     }
                     if (mode == 10) torqueWritten |= torque != 0;
@@ -140,10 +150,9 @@ struct OfflineMaster {
             }
             if (enabled) ++activeCycles;
             if (delayPositionCycle && activeCycles == 200) {
-                // 小于 max_cycle_gap，但墙钟轨迹推进将产生超速步进。
+                // 小于 max_cycle_gap，单次通知仍只应推进一个主站周期。
                 std::this_thread::sleep_for(std::chrono::milliseconds(60));
-                for (int i = 0; i < 2; ++i)
-                    targetsBeforeGap.push_back(master.getSlaveOutputVarValue<int32_t>(i, 2));
+                delayedPositionCycle = true;
             }
             if (!loseCycles || activeCycles < 10) {
                 rocos::atomicStore(master.ecatBus->timestamp, static_cast<long>(
@@ -156,7 +165,7 @@ struct OfflineMaster {
                 waitpid(child, &status, 0);
                 FAIL("Experiment failed to exit within offline timeout");
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            std::this_thread::sleep_for(std::chrono::microseconds(master.ecatBus->dt));
         }
         std::ifstream log(directory / "process.log");
         const std::string message{std::istreambuf_iterator<char>(log), {}};
@@ -175,7 +184,7 @@ TEST_CASE_FIXTURE(OfflineMaster, "Hardware-only acquisition writes measured Nm i
     CHECK(positionMoved);
     const auto meta = YAML::LoadFile((directory / "measurements.csv.meta.yaml").string());
     CHECK(meta["completed"].as<bool>());
-    CHECK(meta["samples"].as<int>() > 100);
+    CHECK(meta["samples"].as<int>() == 2000);
     std::ifstream csv(directory / "measurements.csv");
     std::string line;
     std::getline(csv, line);
@@ -193,6 +202,121 @@ TEST_CASE_FIXTURE(OfflineMaster, "Hardware-only acquisition writes measured Nm i
         REQUIRE(v2 == 0);  // 非零位置零点不影响速度。
         previous = t;
     }
+}
+
+TEST_CASE_FIXTURE(OfflineMaster, "Friction sweeps use master dt and record aligned measured feedback") {
+    master.ecatBus->dt = 2000;
+    REQUIRE(run(false, false, false, IDENTIFICATION_TEST_DATA "/friction_protocol.json") == 0);
+    CHECK(enabled);
+    CHECK(positionMoved);
+    CHECK(secondsBeforeFirstPositionMove >= 2.0);
+    CHECK_FALSE(otherJointMoved);
+    const auto meta = YAML::LoadFile((directory / "measurements.csv.meta.yaml").string());
+    CHECK(meta["completed"].as<bool>());
+    CHECK(meta["joint"].as<std::string>() == "joint_1");
+    CHECK(meta["period_seconds"].as<double>() == doctest::Approx(.002));
+    CHECK(meta["samples"].as<int>() == 598);
+    std::ifstream csv(directory / "measurements.csv");
+    std::string line;
+    std::getline(csv, line);
+    CHECK(line == "time,reference_time,repeat,pair,sweep,phase,target_velocity,q_1,dq_1,tau_1,q_2,dq_2,tau_2");
+    std::set<std::string> phases;
+    std::set<int> sweeps;
+    double lastTime = -1, maxPosition = 0;
+    int row = 0;
+    while (std::getline(csv, line)) {
+        std::replace(line.begin(), line.end(), ',', ' ');
+        std::istringstream input(line);
+        int repeat, pair, sweep;
+        double t, referenceTime, speed, q1, v1, tau1, q2, v2, tau2;
+        std::string phase;
+        REQUIRE(bool(input >> t >> referenceTime >> repeat >> pair >> sweep >> phase >> speed >>
+                     q1 >> v1 >> tau1 >> q2 >> v2 >> tau2));
+        CHECK(t > lastTime);
+        lastTime = t;
+        CHECK(referenceTime == doctest::Approx(row++ * .01));
+        CHECK(repeat == 0);
+        CHECK(pair == sweep / 2);
+        const double expected = sweep < 2 ? .05 : .06;
+        CHECK(speed == doctest::Approx(phase == "dwell" ? 0 : (sweep % 2 ? -expected : expected)));
+        if (phase == "dwell") CHECK(q1 == doctest::Approx(sweep % 2 ? 0 : .06));
+        phases.insert(phase);
+        sweeps.insert(sweep);
+        maxPosition = std::max(maxPosition, q1);
+        CHECK(q2 == 0);
+        CHECK(v1 == 0);  // Fake PDO velocity is zero, even when reference speed is nonzero.
+        CHECK(v2 == 0);
+        CHECK(tau1 == doctest::Approx(5));
+        CHECK(tau2 == doctest::Approx(-5));
+    }
+    CHECK(maxPosition == doctest::Approx(.06));
+    CHECK(phases == std::set<std::string>{"ramp", "steady", "dwell"});
+    CHECK(sweeps == std::set<int>{0, 1, 2, 3});
+}
+
+TEST_CASE("Friction approach respects synchronized position, speed, acceleration and jerk limits") {
+    std::vector<rocos::Drive> drives(2);
+    Eigen::Vector2d travel(1.45, -0.6);
+    for (auto& drive : drives) {
+        drive.limit.vel = 2;
+        drive.limit.acc = .6;
+        drive.limit.jerk = 3;
+    }
+    drives[1].limit.vel = .1;
+    constexpr double dt = .001;
+    const rocos::experiment::FrictionApproach approach(travel, drives, dt);
+    CHECK(approach.progress(0) == 0);
+    CHECK(approach.progress(approach.duration()) == 1);
+    const auto endpointAcceleration = [&](double time, double step) {
+        return (approach.progress(time + 2 * step) - 2 * approach.progress(time + step) +
+                approach.progress(time)) / (step * step);
+    };
+    CHECK(std::abs(endpointAcceleration(0, dt) * travel[0]) < .001);
+    CHECK(std::abs(endpointAcceleration(approach.duration(), -dt) * travel[0]) < .001);
+    double maxSpeed = 0, maxAcceleration = 0, maxJerk = 0;
+    for (double t = dt; t < approach.duration() + dt; t += dt) {
+        const double a = approach.progress(t - dt), b = approach.progress(t);
+        const double c = approach.progress(t + dt), d = approach.progress(t + 2 * dt);
+        maxSpeed = std::max(maxSpeed, (b - a) / dt);
+        maxAcceleration = std::max(maxAcceleration, std::abs(c - 2*b + a) / (dt*dt));
+        maxJerk = std::max(maxJerk, std::abs(d - 3*c + 3*b - a) / (dt*dt*dt));
+    }
+    CHECK(maxSpeed * travel[0] == doctest::Approx(.2));
+    CHECK(maxSpeed * std::abs(travel[1]) <= drives[1].limit.vel);
+    CHECK(maxAcceleration * travel[0] <= drives[0].limit.acc + 1e-6);
+    CHECK(maxJerk * travel[0] <= drives[0].limit.jerk + 1e-5);
+}
+
+TEST_CASE_FIXTURE(OfflineMaster, "Friction acquisition approaches the protocol pose before recording") {
+    master.setSlaveInputVarValue<int32_t>(1, 1, 4500);  // joint_2 = 0.1 rad
+    REQUIRE(run(false, false, false, IDENTIFICATION_TEST_DATA "/friction_protocol.json") == 0);
+    CHECK(enabled);
+    const auto meta = YAML::LoadFile((directory / "measurements.csv.meta.yaml").string());
+    CHECK(meta["completed"].as<bool>());
+    CHECK(meta["approach_speed_limit_rad_s"].as<double>() == doctest::Approx(.2));
+    CHECK(meta["samples"].as<int>() == 598);
+    std::ifstream csv(directory / "measurements.csv");
+    std::string sample;
+    std::getline(csv, sample);
+    while (std::getline(csv, sample)) {
+        std::replace(sample.begin(), sample.end(), ',', ' ');
+        std::istringstream input(sample);
+        std::string phase;
+        double t, reference, speed, q1, dq1, tau1, q2, dq2, tau2;
+        int repeat, pair, sweep;
+        REQUIRE(bool(input >> t >> reference >> repeat >> pair >> sweep >> phase >> speed >>
+                     q1 >> dq1 >> tau1 >> q2 >> dq2 >> tau2));
+        CHECK(q2 == 0);  // 对位动作未写入采集 CSV。
+    }
+}
+
+TEST_CASE_FIXTURE(OfflineMaster, "Friction acquisition rejects joint motion before enabling") {
+    master.setSlaveInputVarValue<int32_t>(0, 2, 10000);  // joint_1 = 0.05 rad/s
+    CHECK(run(false, false, false, IDENTIFICATION_TEST_DATA "/friction_protocol.json") != 0);
+    CHECK_FALSE(enabled);
+    const auto meta = YAML::LoadFile((directory / "measurements.csv.meta.yaml").string());
+    CHECK_FALSE(meta["completed"].as<bool>());
+    CHECK(meta["failure"].as<std::string>().find("stationary before friction approach") != std::string::npos);
 }
 
 TEST_CASE_FIXTURE(OfflineMaster, "Impedance preloads gravity in CSP and applies configured friction in CST") {
@@ -239,7 +363,7 @@ TEST_CASE_FIXTURE(OfflineMaster, "Impedance preloads gravity in CSP and applies 
 }
 
 TEST_CASE_FIXTURE(OfflineMaster, "Impedance aborts if CST mode feedback never acknowledges") {
-    CHECK(run(true, false, false, true) == 1);
+    CHECK(run(true, false, false, {}, true) == 1);
     CHECK(cspEnabled);
     CHECK(cstRequested);
     CHECK_FALSE(torqueWritten);
@@ -249,18 +373,18 @@ TEST_CASE_FIXTURE(OfflineMaster, "Impedance aborts if CST mode feedback never ac
 }
 
 TEST_CASE_FIXTURE(OfflineMaster,
-                  "Position step violation rejects PDO writes and disables acquisition") {
+                  "A delayed notification still advances by one configured bus period") {
     // joint_1 从 0.5 rad 过渡到中心，避开零位静止过渡。
+    master.ecatBus->dt = 2000;
     master.setSlaveInputVarValue<int32_t>(0, 1, 101000);
-    REQUIRE(run(false, false, true) == 1);
+    REQUIRE(run(false, false, true) == 0);
     CHECK(enabled);
-    REQUIRE(targetsBeforeGap.size() == 2);
-    for (int i = 0; i < 2; ++i)
-        CHECK(master.getSlaveOutputVarValue<int32_t>(i, 2) == targetsBeforeGap[i]);
+    CHECK(delayedPositionCycle);
+    CHECK(positionMoved);
     const auto meta = YAML::LoadFile((directory / "measurements.csv.meta.yaml").string());
-    CHECK_FALSE(meta["completed"].as<bool>());
-    CHECK(meta["failure"].as<std::string>().find("Command velocity limit exceeded: joint_1") !=
-          std::string::npos);
+    CHECK(meta["completed"].as<bool>());
+    CHECK(meta["period_seconds"].as<double>() == doctest::Approx(.002));
+    CHECK(meta["samples"].as<int>() == 1000);
     CHECK(std::filesystem::exists(directory / "measurements.csv"));
 }
 

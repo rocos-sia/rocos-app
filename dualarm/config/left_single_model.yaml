@@ -1,0 +1,2 @@
+robot:
+  urdf: ../../../rocos-mujoco/config/dualarm/urdf/dualarm_left.urdf

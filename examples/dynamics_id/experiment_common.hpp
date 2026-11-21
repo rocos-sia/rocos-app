@@ -194,18 +194,16 @@ inline void checkEnabled(Hardware& hardware) {
 // 与位置控制器相同的指令步进检查；使用标称硬件周期，不能用延迟后的墙钟时间放宽限速。
 // previous 必须是上一条成功下发的目标，首次下发前以实际位置建立基线。
 inline void validatePositionCommand(const JntArray& target, const JntArray& previous,
-                                    const std::vector<Drive>& drives,
-                                    const Eigen::VectorXd& velocity, double dt) {
+                                    const std::vector<Drive>& drives, double dt) {
     require(!drives.empty() && target.rows() == drives.size() &&
-                previous.rows() == drives.size() && velocity.size() == target.rows(),
+                previous.rows() == drives.size(),
             "Position command dimension mismatch");
     require(std::isfinite(dt) && dt > 0, "Invalid position command period");
     for (size_t j = 0; j < drives.size(); ++j) {
         const auto& drive = drives[j];
         const auto& limit = drive.limit;
         require(std::isfinite(limit.lower) && std::isfinite(limit.upper) &&
-                    limit.lower < limit.upper && std::isfinite(limit.vel) && limit.vel > 0 &&
-                    std::isfinite(velocity[j]) && velocity[j] > 0,
+                    limit.lower < limit.upper && std::isfinite(limit.vel) && limit.vel > 0,
                 "Invalid position command limits: " + drive.joint_name);
         require(std::isfinite(target(j)) && std::isfinite(previous(j)),
                 "Nonfinite position command: " + drive.joint_name);
@@ -213,7 +211,7 @@ inline void validatePositionCommand(const JntArray& target, const JntArray& prev
         require(target(j) >= limit.lower && target(j) <= limit.upper,
                 "Command position limit exceeded: " + drive.joint_name);
         const double speed = std::abs(target(j) - previous(j)) / dt;
-        const double maxSpeed = std::min(limit.vel, velocity[j]);
+        const double maxSpeed = limit.vel;
         if (!std::isfinite(speed) || speed > maxSpeed) {
             throw std::runtime_error(
                 "Command velocity limit exceeded: " + drive.joint_name +

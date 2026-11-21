@@ -14,6 +14,6 @@ logging:
   console_level: info
 arms:
   left:
-    config: left.yaml
+    config: left_dual.yaml
   right:
-    config: right.yaml
+    config: right_dual.yaml

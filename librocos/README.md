@@ -78,6 +78,7 @@ UDP v2 字段与会话 ID 格式保持兼容，但本次状态发送节拍需要
 | `librocos_joint_point_to_point_motion` | 指定关节相对当前位置的七次时间标定定位 |
 | `librocos_generate_consecutive_motions` | 四次独立 RCI 会话的往返运动 |
 | `librocos_communication_test` | 保持当前参考，统计回调周期和指令接收比例 |
+| `librocos_joint_5_7_sine` | J1～J4 保持，J5～J7 在绝对 ±30° 间走完整正弦周期，速度监测上限 0.5 rad/s |
 | `librocos_joint_6_7_sine` | Talon J6/J7 绝对零位中心、±60°、0.2 Hz、180 s，配置预检与异步数据采集 |
 
 ```text
@@ -85,6 +86,27 @@ program [host [http_port [udp_port [joint_index [amplitude_rad [duration_s]]]]]]
 ```
 
 默认地址 `127.0.0.1`，HTTP 8080，UDP 8081，关节索引 0，幅度 0.01 rad，轨迹持续 4 s。幅度与时间必须符合当前机器人限制。运动结束后 RCI 入口保持开启，可以继续启动新会话，关闭入口使用 `disableRci()`。
+
+`joint_5_7_sine` 从各轴当前保持位置匹配初始相位，J5～J7 起点须在 ±30° 内。
+启停各用 2 秒做相位速度过渡，轨迹峰值不超过 0.45 rad/s，实际或参考速度超过 0.5 rad/s 时请求停止。
+要求主站配置为 1 ms。客户端跟随 App 的新反馈周期发布目标，使用 SDK 默认的 20 ms 反馈和应用确认超时。
+默认 3 个周期，约 24 秒。`--duration 秒数` 设置总时长（至少约 9.31 秒），程序在所给时间内安排完整周期，正常完成后回到起点。
+双臂 APP 上通过 `--arm` 选臂，两臂分别使用各自的 UDP 端口。
+给本机两条命令指定同一个未来的 `--start-at Unix时间戳`，即可在该时刻同时开始接入两路 RCI 会话。
+
+```bash
+./build/dualarm/bin/librocos_joint_5_7_sine 170.170.170.170 8080 8083 --arm right
+./build/dualarm/bin/librocos_joint_5_7_sine 170.170.170.170 8080 8081 --arm left --duration 1200
+```
+
+在两臂已使能、静止且释放 HTTP 控制权后，从同一本机终端发起 20 分钟并行测试。
+
+```bash
+start_at=$(( $(date +%s) + 5 ))
+./build/dualarm/bin/librocos_joint_5_7_sine 170.170.170.170 8080 8081 --arm left --duration 1200 --start-at "$start_at" &
+./build/dualarm/bin/librocos_joint_5_7_sine 170.170.170.170 8080 8083 --arm right --duration 1200 --start-at "$start_at" &
+wait
+```
 
 `joint_6_7_sine` 使用独立参数格式，读取 App 导出的有效配置和 URDF，依赖 yaml-cpp、TinyXML2。启动时检查 J6/J7 已定位至零位，正常运动含首尾各 5 s 幅值过渡及额外 1 s 零位保持。数据分析使用 NumPy、Matplotlib，运行流程与安全检查详见 [J6/J7 示例说明](../docs/librocos_joint_6_7_sine_safety_review.md)。
 

@@ -115,6 +115,10 @@ struct Options {
     std::chrono::milliseconds stop_timeout{3000};
     std::chrono::milliseconds http_timeout{1000};
     std::chrono::milliseconds read_period{20};
+    // Set to "left" or "right" when connecting to rocosDualArmMain.
+    std::string arm{};
+    // Require continuous App feedback cycles.
+    bool require_consecutive_cycles{false};
 };
 
 class Robot {

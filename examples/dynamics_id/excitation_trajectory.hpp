@@ -37,7 +37,7 @@ struct ExcitationTrajectory {
     std::vector<std::string> names;
     std::vector<Drive> drives;
     std::vector<std::vector<double>> a, b;
-    Eigen::VectorXd centers, lower, upper, velocity, acceleration;
+    Eigen::VectorXd centers, lower, upper, plannedVelocity, acceleration;
     double duration = 0;
     std::string urdfHash;
 
@@ -61,7 +61,7 @@ struct ExcitationTrajectory {
         centers.resize(n);
         lower.resize(n);
         upper.resize(n);
-        velocity.resize(n);
+        plannedVelocity.resize(n);
         acceleration.resize(n);
         for (size_t j = 0; j < n; ++j) {
             const auto bound = bounds[j];
@@ -74,10 +74,10 @@ struct ExcitationTrajectory {
             centers[j] = value("center");
             lower[j] = std::max(lim.lower, value("lower"));
             upper[j] = std::min(lim.upper, value("upper"));
-            velocity[j] = std::min(lim.vel, value("velocity"));
+            plannedVelocity[j] = std::min(lim.vel, value("velocity"));
             acceleration[j] = std::min(lim.acc, value("acceleration"));
             require(lower[j] < upper[j] && centers[j] >= lower[j] && centers[j] <= upper[j] &&
-                        velocity[j] > 0 && acceleration[j] > 0,
+                        plannedVelocity[j] > 0 && acceleration[j] > 0,
                     "Invalid trajectory bounds");
             require(coefficients[j].IsSequence() && coefficients[j].size() == 2,
                     "Invalid Fourier coefficients");
@@ -91,16 +91,17 @@ struct ExcitationTrajectory {
         }
     }
 
-    void evaluate(double t, double scale, JntArray& target) const {
+    void evaluate(double t, double scale, JntArray& target, bool preflight = false) const {
         require(target.rows() == names.size(), "Wrong trajectory target size");
         for (size_t j = 0; j < names.size(); ++j) {
             auto state = evaluateFourier(a[j], b[j], centers[j], t, duration);
             state[1] *= scale;
             state[2] *= scale * scale;
             state[3] *= scale * scale * scale;
+            const double maxVelocity = preflight ? plannedVelocity[j] : drives[j].limit.vel;
             require(std::isfinite(state[0]) && std::isfinite(state[1]) && std::isfinite(state[2]) &&
                         std::isfinite(state[3]) && state[0] >= lower[j] && state[0] <= upper[j] &&
-                        std::abs(state[1]) <= velocity[j] &&
+                        std::abs(state[1]) <= maxVelocity &&
                         std::abs(state[2]) <= acceleration[j] &&
                         std::abs(state[3]) <= drives[j].limit.jerk,
                     "Excitation exceeds limits: " + names[j]);
@@ -116,17 +117,17 @@ struct ExcitationTrajectory {
         require(count * names.size() <= 10000000, "Trajectory validation exceeds sample budget");
         JntArray target(names.size());
         for (size_t i = 0; i <= static_cast<size_t>(count); ++i)
-            evaluate(std::min(duration, i * step), scale, target);
+            evaluate(std::min(duration, i * step), scale, target, /*preflight=*/true);
     }
 };
 
 // 五次过渡的速度/加速度/jerk 上界，确保当前姿态连续到达激励中心。
-inline double approachDuration(const Eigen::VectorXd& start,
-                               const ExcitationTrajectory& trajectory) {
+template <typename Trajectory>
+double approachDuration(const Eigen::VectorXd& start, const Trajectory& trajectory) {
     double duration = 1.0;
     for (Eigen::Index j = 0; j < start.size(); ++j) {
         const double distance = std::abs(trajectory.centers[j] - start[j]);
-        duration = std::max({duration, 1.875 * distance / trajectory.velocity[j],
+        duration = std::max({duration, 1.875 * distance / trajectory.drives[j].limit.vel,
                              std::sqrt(5.774 * distance / trajectory.acceleration[j]),
                              std::cbrt(60 * distance / trajectory.drives[j].limit.jerk)});
     }

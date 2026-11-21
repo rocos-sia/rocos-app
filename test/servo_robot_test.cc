@@ -58,6 +58,7 @@ struct OfflineMaster {
     rocos::SharedMemoryConfig master{id};
     std::atomic<bool> running{true};
     std::atomic<bool> follow_targets{false};
+    std::atomic<int> disabled_drive{-1};
     std::thread thread;
     OfflineMaster() {
         REQUIRE(master.createSharedMemory());
@@ -92,7 +93,7 @@ struct OfflineMaster {
                     uint16_t status = 0x40;
                     if ((control & 0x8f) == 0x06) status = 0x21;
                     if ((control & 0x8f) == 0x07) status = 0x23;
-                    if ((control & 0x8f) == 0x0f) status = 0x27;
+                    if ((control & 0x8f) == 0x0f) status = i == disabled_drive ? 0x23 : 0x27;
                     master.setSlaveInputVarValue<uint16_t>(i, 0, status);
                     if (follow_targets && status == 0x27) {
                         const auto previous = master.getSlaveInputVarValue<int32_t>(i, 1);
@@ -279,6 +280,68 @@ TEST_CASE("MoveJ completion holds the last submitted position despite feedback l
     CHECK(robot.hardware->GetPosition().data.isApprox(actual.data, 1e-10));
     CHECK(offline.master.getSlaveOutputVarValue<int32_t>(0, 2) ==
           1000 + static_cast<int32_t>(std::llround(direction * .004 * 200000)));
+}
+
+TEST_CASE("RCI stop holds the Target Position PDO when drive enable feedback drops") {
+    bool close_rci = false;
+    SUBCASE("return to RCI standby") {}
+    SUBCASE("close RCI and return to STOPPED") { close_rci = true; }
+
+    OfflineMaster offline;
+    auto config = offline.config();
+    config.servo.communication_guard_enabled = false;
+    rocos::Robot robot(config);
+    REQUIRE(robot.SetEnabled() == Result::NoError);
+    REQUIRE(robot.EnableRci() == Result::NoError);
+
+    sockpp::udp_socket reservation;
+    REQUIRE(reservation.bind(sockpp::inet_address("127.0.0.1", 0)));
+    const auto port = sockpp::inet_address(reservation.address()).port();
+    reservation.close();
+    std::shared_ptr<rocos::ServoSession> session;
+    REQUIRE(robot.StartRciControl(session, port) == Result::NoError);
+    REQUIRE(session);
+
+    const auto wait_until = [](const auto& condition) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+        while (std::chrono::steady_clock::now() < deadline) {
+            if (condition()) return true;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        return false;
+    };
+    const auto target = robot.hardware->GetCmdPosition();
+    const auto target_counts = offline.master.getSlaveOutputVarValue<int32_t>(0, 2);
+    sockpp::udp_socket client;
+    REQUIRE(client.bind(sockpp::inet_address("127.0.0.1", 0)));
+    MotionGeneratorCommand command{};
+    command.session_id = session->id;
+    command.message_id = 1;
+    for (unsigned int i = 0; i < target.rows(); ++i) command.q_c[i] = target(i);
+    REQUIRE(client.send_to(&command, sizeof(command), sockpp::inet_address("127.0.0.1", port)) ==
+            sizeof(command));
+    REQUIRE(wait_until([&] {
+        const auto status = robot.GetRciStatus();
+        return status.contains("current_control") &&
+               status["current_control"]["applied_message_id"] == 1;
+    }));
+
+    // 反馈与最后的 CSP 目标相差 0.005 rad，直接切到反馈会超过 3 rad/s。
+    offline.master.setSlaveInputVarValue<int32_t>(0, 1, target_counts + 1000);
+    offline.disabled_drive = 0;
+    REQUIRE(wait_until([&] { return !robot.IsEnabled(); }));
+    REQUIRE(std::abs(robot.hardware->GetPosition()(0) - target(0)) > 0.003);
+    REQUIRE(robot.hardware->GetOutputSnapshot().mode == 8);
+    REQUIRE((close_rci ? robot.DisableRci() : robot.StopRciControl()) == Result::NoError);
+
+    const std::string expected = close_rci ? "STOPPED" : "RCI";
+    REQUIRE(wait_until([&] { return robot.GetStateString() == expected; }));
+    std::this_thread::sleep_for(std::chrono::milliseconds(25));
+    CHECK(robot.GetStateString() == expected);
+    CHECK_FALSE(robot.IsEnabled());
+    CHECK_FALSE(session->Active());
+    CHECK(robot.hardware->GetOutputSnapshot().position.data.isApprox(target.data, 1e-12));
+    CHECK(offline.master.getSlaveOutputVarValue<int32_t>(0, 2) == target_counts);
 }
 
 TEST_CASE("CSP jog starts from the held target despite J2 feedback lag") {

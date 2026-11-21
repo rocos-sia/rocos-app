@@ -56,6 +56,8 @@ HTTP 接口：
 | 精确运动 | `POST /api/arms/{arm}/robot/{movej_ik,movel,movel_fk}` |
 | 关节、笛卡尔、零空间、SVD 点动 | `POST /api/arms/{arm}/robot/jog/{joint,cartesian,nullspace,svd}` |
 | 停止点动 | `POST /api/arms/{arm}/robot/jog/stop` |
+| 开启、接入、停止和退出 RCI | `POST /api/arms/{arm}/robot/rci/{enable,start,stop,disable}` |
+| RCI 状态和最近伺服诊断 | `GET /api/arms/{arm}/robot/rci/status` |
 | TCP、使能查询 | `GET /api/arms/{arm}/robot/{tcp,enabled}` |
 | 坐标系列表 | `GET /api/arms/{arm}/robot/{tool_frames,object_frames}` |
 | 坐标系读取、设置、删除 | `GET/POST/DELETE /api/arms/{arm}/robot/{tool_frame,object_frame}` |
@@ -96,6 +98,15 @@ BASE/FLANGE/TOOL/OBJECT，参考所选臂，WORLD 不能直接作为运动 frame
 同一臂的鉴权、租约更新与写命令在同一个臂级锁内执行，另一个臂可独立接收请求。
 GET 不续期；release 不等价于运动停止。超时的 MoveJ POST 不应盲目重试。
 
+`capabilities.rci=true` 表示支持按臂 UDP 伺服。开启和退出 RCI 需要本臂控制权。
+启动会话时本臂必须已在 RCI 待命。启动请求可指定 `port`（默认 8081）和
+`mode`（`joint` 或 `cartesian`，默认 `joint`）。左右同时伺服时要指定不同 UDP 端口，
+例如左臂 8081、右臂 8083。每次启动各自返回会话 ID 和协议版本，UDP 数据使用现有 RCI v2 格式。
+两臂各自跟随自己的控制周期。会话停止后回到本臂 RCI 待命，退出 RCI 后回到 STOPPED。
+
+`librocos::Options` 中填写 `arm = "left"` 或 `arm = "right"`，并设置各自的 `udp_port`。
+每个 `librocos::Robot` 连接对应一条伺服会话。按臂路径沿用单臂 RCI 在线契约的会话与鉴权语义。
+
 MuJoCo 下使能期间关节可能漂移。重新使能后须等状态进入 `STOPPED`、反馈速度持续稳定再发
 MoveJ；使能成功响应不表示物理反馈已稳定。联调曾在立即重发时触发核心的 `SpeedLimit`
 保护，当前双臂入口保留单臂核心的使能和轨迹衔接语义。
@@ -109,7 +120,7 @@ SIGINT/SIGTERM 停止接单后分别停止两臂运动、下使能并回收线�
 单臂命令失败不操作另一臂；同进程仍共享进程故障边界。
 
 本版本提供独立运动，不承诺两臂同步启动、同步完成或同周期快照，也不提供跨臂避碰规划。
-未开放脚本、工具包导入/导出等管理、RCI/UDP、DDS 和双臂批量动作；状态保留单臂既有字段。
+未开放脚本、工具包导入/导出等管理、DDS 和双臂批量动作；状态保留单臂既有字段。
 
 ## 六点工具标定
 
@@ -158,6 +169,16 @@ SDK 仅增加只读 `Robot::GetToolPackage`、带状态门闩的 `Robot::SaveToo
 ```bash
 python3 dualarm/tests/integration_mujoco.py
 ```
+
+只验证双路 RCI UDP 时，使用独立的仿真主站 ID 和两路自动分配的 UDP 端口。
+
+```bash
+cmake --build build/dualarm --target rocosDualArmMain dualarm_rci_client --parallel 2
+python3 dualarm/tests/integration_mujoco.py --rci-only
+```
+
+测试由两个 `librocos::Robot` 客户端驱动，验证右臂单独运动、双臂并行运动、
+右臂断流时左臂继续执行、正常停止和退出 RCI。报告位于 `build/dualarm/integration-rci/report.json`。
 
 完整工具包标定联调（额外依赖 Python NumPy，仿真最长 120 秒）：
 

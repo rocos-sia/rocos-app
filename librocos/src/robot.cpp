@@ -272,6 +272,8 @@ struct Robot::Impl {
             options.startup_timeout.count() <= 0 || options.stop_timeout.count() <= 0 ||
             options.http_timeout.count() <= 0 || options.read_period.count() <= 0)
             throw std::invalid_argument("Invalid librocos connection or timing options");
+        if (!options.arm.empty() && options.arm != "left" && options.arm != "right")
+            throw std::invalid_argument("librocos arm must be left or right");
     }
 
     std::unique_lock<std::mutex> operation() {
@@ -281,8 +283,10 @@ struct Robot::Impl {
         return lock;
     }
 
-    Json http(const std::string& path, const Json* request = nullptr,
+    Json http(const std::string& endpoint, const Json* request = nullptr,
               const httplib::Headers& headers = {}) const {
+        const auto path = options.arm.empty() ? "/api" + endpoint
+                                             : "/api/arms/" + options.arm + endpoint;
         httplib::Client client(host, options.http_port);
         client.set_connection_timeout(options.http_timeout);
         client.set_read_timeout(options.http_timeout);
@@ -313,13 +317,13 @@ struct Robot::Impl {
         }
     }
 
-    RciStatus status() const { return statusFromJson(http("/api/robot/rci/status")); }
+    RciStatus status() const { return statusFromJson(http("/robot/rci/status")); }
 
     void release() {
         if (credentials.empty()) return;
         const Json body = Json::object();
         try {
-            http("/api/control/release", &body, credentials);
+            http("/control/release", &body, credentials);
         } catch (const ControlException& error) {
             if (error.code() != 3006 && error.code() != 3007) throw;
             // 已过期或撤销的 HTTP 租约可以清除本地缓存。
@@ -334,7 +338,7 @@ struct Robot::Impl {
         static std::atomic<unsigned int> sequence{0};
         const auto id = "librocos-" + std::to_string(getpid()) + "-" + std::to_string(++sequence);
         const Json acquire = {{"client_id", id}, {"client_name", "librocos"}};
-        const auto owner = http("/api/control/acquire", &acquire);
+        const auto owner = http("/control/acquire", &acquire);
         try {
             credentials = {{"X-Rocos-Control-Token", owner.at("token").get<std::string>()},
                            {"X-Rocos-Client-Id", id}};
@@ -343,7 +347,7 @@ struct Robot::Impl {
         }
         const Json body = Json::object();
         try {
-            http(enabled ? "/api/robot/rci/enable" : "/api/robot/rci/disable", &body, credentials);
+            http(enabled ? "/robot/rci/enable" : "/robot/rci/disable", &body, credentials);
         } catch (...) {
             const auto original = std::current_exception();
             try {
@@ -377,7 +381,7 @@ struct Robot::Impl {
         auto state = status();
         if (state.control_active) {
             const Json body = Json::object();
-            http("/api/robot/rci/stop", &body);
+            http("/robot/rci/stop", &body);
         }
         const auto deadline = Clock::now() + options.stop_timeout;
         for (;;) {
@@ -406,7 +410,7 @@ Robot::~Robot() {
 }
 
 RobotState Robot::readOnce() const {
-    const auto json = impl_->http("/api/robot/state");
+    const auto json = impl_->http("/robot/state");
     try {
         RobotState state;
         const auto& joints = json.at("joint_states");
@@ -473,7 +477,7 @@ void Robot::control(const std::function<JointPositions(const RobotState&, Durati
     const auto& options = impl_->options;
     const Json request = {{"port", options.udp_port}, {"mode", "joint"}};
     // 只有已确认启动成功才取得清理责任，拒绝接入时不会停止他人的会话。
-    const auto data = impl_->http("/api/robot/rci/start", &request);
+    const auto data = impl_->http("/robot/rci/start", &request);
     impl_->session_owned = true;
     try {
         MotionGeneratorCommand command{};
@@ -495,6 +499,11 @@ void Robot::control(const std::function<JointPositions(const RobotState&, Durati
         }
         std::uint64_t callback_time = 0;
         std::uint64_t finished_id = 0;
+        std::uint64_t last_cycle = 0;
+        const auto receive_timeout =
+            std::chrono::duration_cast<std::chrono::microseconds>(options.receive_timeout);
+        const auto feedback_timeout = options.require_consecutive_cycles
+            ? std::min(receive_timeout, options.control_period * 2) : receive_timeout;
         // 跟随 App 新周期响应，避免独立定时发送的相位漂移；网络突发仍需超时保护。
         // 原因与排查：docs/servo_timing_root_cause_and_diagnosis.md。
         bool fresh_state = state.reference_valid;
@@ -512,10 +521,22 @@ void Robot::control(const std::function<JointPositions(const RobotState&, Durati
         while (!impl_->stop_requested) {
             if (!fresh_state)
                 fresh_state = socket.receive(command.session_id, initial.dof, reply_id, state);
-            if (fresh_state) last_fresh = Clock::now();
-            if (Clock::now() - last_fresh >= options.receive_timeout)
+            if (fresh_state) {
+                const auto received_at = Clock::now();
+                if (options.require_consecutive_cycles && command.message_id) {
+                    if (state.cycle != last_cycle + 1)
+                        throw ControlException("Missed App control cycle: expected " +
+                                               std::to_string(last_cycle + 1) + ", received " +
+                                               std::to_string(state.cycle));
+                    if (received_at - last_fresh >= feedback_timeout)
+                        throw NetworkException("Missed consecutive feedback deadline");
+                }
+                last_fresh = received_at;
+                last_cycle = state.cycle;
+            }
+            if (Clock::now() - last_fresh >= feedback_timeout)
                 throw NetworkException("UDP feedback is stale or missing");
-            auto feedback_deadline = last_fresh + options.receive_timeout;
+            auto feedback_deadline = last_fresh + feedback_timeout;
             if (state.applied_message_id) {
                 const auto& sent = sent_commands[state.applied_message_id % sent_commands.size()];
                 if (sent.id != state.applied_message_id ||

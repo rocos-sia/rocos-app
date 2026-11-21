@@ -1,0 +1,21 @@
+{
+  "joint": "joint_1",
+  "joint_index": 0,
+  "joint_names": ["joint_1", "joint_2"],
+  "urdf_hash": "test-model",
+  "config": {
+    "joint": "joint_1",
+    "pose": [0, 0],
+    "lower": 0,
+    "upper": 0.06,
+    "speeds": [0.05, 0.06],
+    "acceleration": 0.3,
+    "minimum_steady_seconds": 0.3,
+    "repeats": 1,
+    "dwell_seconds": 0.05,
+    "sample_rate": 100
+  },
+  "trajectory_duration_seconds": 5.975,
+  "pairs": 2,
+  "initial_pose": [0, 0]
+}

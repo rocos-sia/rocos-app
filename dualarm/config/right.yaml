@@ -1,6 +1,7 @@
 # Reuse the sibling MuJoCo robot/hardware model, with separate device data.
 schema_version: 1
 robot_config: ../../../rocos-mujoco/config/dualarm/app/robot_right.yaml
+user_config: right_single_model.yaml
 device_config: devices/right/device.yaml
 tool_library: ../../build/dualarm/tools/right
 scripts: ../../scripts

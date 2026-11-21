@@ -1,0 +1,2 @@
+robot:
+  urdf: ../../config/robots/dualarm_right/dualarm_right.urdf

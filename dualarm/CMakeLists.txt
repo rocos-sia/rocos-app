@@ -9,6 +9,10 @@ target_link_libraries(rocos_dualarm PUBLIC rocos::robot PRIVATE tinyxml2)
 add_executable(rocosDualArmMain main.cpp)
 target_link_libraries(rocosDualArmMain PRIVATE rocos_dualarm)
 
+# Explicit MuJoCo integration client. The Python harness owns the simulator.
+add_executable(dualarm_rci_client tests/rci_client.cpp)
+target_link_libraries(dualarm_rci_client PRIVATE librocos)
+
 add_executable(dualarm_unit_test tests/dualarm_unit_test.cpp)
 target_include_directories(dualarm_unit_test PRIVATE ${PROJECT_SOURCE_DIR}/test)
 target_link_libraries(dualarm_unit_test PRIVATE rocos_dualarm)

@@ -29,6 +29,7 @@
 #include "src/servo_type.hpp"
 #include "src/realtime_thread.hpp"
 #include "test/doctest.h"
+#include "librocos/examples/joint_5_7_sine_trajectory.hpp"
 #include "librocos/examples/joint_sine_trajectory.hpp"
 
 extern char** environ;
@@ -645,6 +646,46 @@ TEST_CASE("librocos fault snapshots retain nonfinite feedback without hiding the
 }
 
 #ifdef LIBROCOS_EXAMPLE_DIR
+TEST_CASE("J5 J6 J7 sine reaches both absolute limits at no more than 0.5 rad/s") {
+    using Trajectory = joint_sine::Joint5To7Sine;
+    const librocos::JointArray initial{0.2, -0.4, 0.1, 0.8, 0.25, -0.13, 0.04};
+    const Trajectory trajectory(initial);
+    CHECK(trajectory.command(0).q == initial);
+    CHECK(trajectory.command(Trajectory::kDuration).q == initial);
+    CHECK(trajectory.command(0.001).q[4] == doctest::Approx(initial[4]).epsilon(1e-8));
+
+    auto previous = initial;
+    double last_time = 0;
+    std::array<double, 3> lower{}, upper{}, peak_speed{};
+    for (int step = 1; last_time < Trajectory::kDuration; ++step) {
+        const double time = std::min(step * 0.001, Trajectory::kDuration);
+        const auto command = trajectory.command(time);
+        REQUIRE(command.dof == 7);
+        for (std::size_t joint = 0; joint < 4; ++joint)
+            REQUIRE(command.q[joint] == initial[joint]);
+        for (std::size_t index = 0; index < 3; ++index) {
+            const auto joint = index + 4;
+            const double q = command.q[joint];
+            const double speed = std::abs(q - previous[joint]) / (time - last_time);
+            REQUIRE(std::abs(q) <= Trajectory::kAmplitude + 1e-12);
+            REQUIRE(speed <= 0.5 + 1e-9);
+            lower[index] = std::min(lower[index], q);
+            upper[index] = std::max(upper[index], q);
+            peak_speed[index] = std::max(peak_speed[index], speed);
+        }
+        previous = command.q;
+        last_time = time;
+    }
+    for (std::size_t index = 0; index < 3; ++index) {
+        CHECK(lower[index] == doctest::Approx(-Trajectory::kAmplitude).epsilon(1e-6));
+        CHECK(upper[index] == doctest::Approx(Trajectory::kAmplitude).epsilon(1e-6));
+        CHECK(peak_speed[index] == doctest::Approx(Trajectory::kNominalVelocity).epsilon(1e-6));
+    }
+    auto outside = initial;
+    outside[5] = Trajectory::kAmplitude + 0.001;
+    CHECK_THROWS_AS(Trajectory{outside}, std::invalid_argument);
+}
+
 TEST_CASE("J6 J7 sine is bounded and C3 at amplitude ramp connections") {
     joint_sine::Parameters p;
     const auto bound = joint_sine::bounds(p);
@@ -951,4 +992,50 @@ TEST_CASE("librocos follows server cycles despite a different nominal local peri
     for (size_t i = 1; i < cycles.size(); ++i) CHECK(cycles[i] > cycles[i-1]);
     CHECK(peer.commands == 12);
     CHECK(peer.stops == 1);
+}
+
+TEST_CASE("librocos strict cycle mode requires consecutive feedback cycles") {
+    Peer peer;
+    peer.rci_enabled = true;
+    peer.cycle_period_us = 10000;
+    auto options = peer.options;
+    options.control_period = std::chrono::milliseconds(15);
+    options.require_consecutive_cycles = true;
+    librocos::Robot robot("127.0.0.1", options);
+    int callbacks = 0;
+
+    SUBCASE("consecutive cycles including final command complete") {
+        robot.control([&](const auto& state, auto) {
+            CHECK(state.applied_message_id == static_cast<uint64_t>(callbacks));
+            return ++callbacks == 4 ? librocos::MotionFinished(hold(state)) : hold(state);
+        });
+        CHECK(peer.commands == 4);
+    }
+    SUBCASE("missing cycle stops before generating another target") {
+        try {
+            robot.control([&](const auto& state, auto) {
+                ++callbacks;
+                peer.skip_cycle = static_cast<int>(state.cycle + 1);
+                return hold(state);
+            });
+            FAIL("Expected the skipped cycle to stop control");
+        } catch (const librocos::ControlException& error) {
+            CHECK(std::string(error.what()).find("Missed App control cycle") != std::string::npos);
+        }
+        CHECK(callbacks == 1);
+        CHECK(peer.commands == 1);
+    }
+    SUBCASE("a repeated application sequence resumes without stopping control") {
+        const std::array<uint64_t, 4> expected{0, 1, 1, 3};
+        robot.control([&](const auto& state, auto) {
+            REQUIRE(callbacks < static_cast<int>(expected.size()));
+            CHECK(state.applied_message_id == expected[callbacks]);
+            peer.stale_ack = ++callbacks == 2;
+            return callbacks == 4 ? librocos::MotionFinished(hold(state)) : hold(state);
+        });
+        CHECK(callbacks == 4);
+        CHECK(peer.commands == 4);
+    }
+    CHECK(peer.stops == 1);
+    CHECK_FALSE(robot.rciStatus().control_active);
 }

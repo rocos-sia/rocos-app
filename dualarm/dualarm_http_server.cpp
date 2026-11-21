@@ -1,5 +1,6 @@
 #include "dualarm_http_server.hpp"
 
+#include <arpa/inet.h>
 #include <openssl/rand.h>
 
 #include <array>
@@ -9,6 +10,8 @@
 
 #include "arm_operations.hpp"
 #include "robot_info_json.hpp"
+#include "servo_session.hpp"
+#include "servo_type.hpp"
 #include "tool_package_json.hpp"
 
 namespace rocos::dualarm {
@@ -51,6 +54,41 @@ std::string String(const Json& body, const char* key) {
       body[key].get_ref<const std::string&>().size() > 256)
     throw std::invalid_argument(std::string("Invalid ") + key);
   return body[key].get<std::string>();
+}
+void ReplyRci(httplib::Response& res, Result result, Json status,
+              const char* message) {
+  Reply(res, result == Result::NoError, static_cast<int>(result),
+        result == Result::NoError ? message : to_string(result), status);
+}
+void StartRci(Robot& robot, const httplib::Request& req,
+              httplib::Response& res) {
+  std::string client_ip = req.remote_addr;
+  if (client_ip == "::1") client_ip = "127.0.0.1";
+  if (client_ip.rfind("::ffff:", 0) == 0) client_ip.erase(0, 7);
+  in_addr address{};
+  if (inet_pton(AF_INET, client_ip.c_str(), &address) != 1 ||
+      address.s_addr == INADDR_ANY)
+    throw std::invalid_argument("RCI UDP requires an IPv4 client");
+
+  const auto body = Body(req);
+  if (body.contains("port") &&
+      (!body["port"].is_number_integer() || body["port"] <= 0 ||
+       body["port"] > 65535))
+    throw std::invalid_argument("Expected a UDP port from 1 to 65535");
+  const auto mode = body.value("mode", std::string{"joint"});
+  if (mode != "joint" && mode != "cartesian")
+    throw std::invalid_argument("Expected mode joint or cartesian");
+  const auto port = body.value("port", uint16_t{8081});
+  std::shared_ptr<ServoSession> session;
+  const auto result =
+      robot.StartRciControl(session, port, mode, ntohl(address.s_addr));
+  auto status = robot.GetRciStatus();
+  if (result == Result::NoError) {
+    status["port"] = port;
+    status["session_id"] = session->Hex();
+    status["protocol_version"] = SERVO_PROTOCOL_VERSION;
+  }
+  ReplyRci(res, result, std::move(status), "RCI control started");
 }
 Json Pose(const Frame& frame) {
   double x, y, z, w;
@@ -241,6 +279,7 @@ void DualArmHttpServer::Handle(const httplib::Request& req,
              {"six_point_calibration", true},
              {"tool_package_calibration", true},
              {"tool_packages", false},
+             {"rci", true},
              {"command_protocol", 1},
              {"synchronized_motion", false}}}});
     return;
@@ -251,7 +290,7 @@ void DualArmHttpServer::Handle(const httplib::Request& req,
       "state",          "info",         "move_status", "enabled",
       "command_status", "tcp",          "tool_frames", "object_frames",
       "tool_frame",     "object_frame", "load_params", "urdf",
-      "urdf/mesh"};
+      "urdf/mesh",      "rci/status"};
   const std::set<std::string> robot_post{"enable",
                                          "disable",
                                          "reset",
@@ -267,6 +306,10 @@ void DualArmHttpServer::Handle(const httplib::Request& req,
                                          "jog/nullspace",
                                          "jog/svd",
                                          "jog/stop",
+                                         "rci/enable",
+                                         "rci/start",
+                                         "rci/stop",
+                                         "rci/disable",
                                          "tool_frame",
                                          "object_frame",
                                          "active_tool_frame",
@@ -323,7 +366,9 @@ void DualArmHttpServer::Handle(const httplib::Request& req,
       HandleModel(req, res, action);
       return;
     }
-    if (action == "state") {
+    if (action == "rci/status") {
+      Reply(res, true, 0, "ok", robot.GetRciStatus());
+    } else if (action == "state") {
       // Serialize publication with acceptance/stop metadata, independently of
       // slow arm command dispatch. A planning record cannot finish on idle
       // data.
@@ -389,12 +434,33 @@ void DualArmHttpServer::Handle(const httplib::Request& req,
           data);
     return;
   }
+  // Following the RCI contract, the current arm must opt in before a client
+  // can start a UDP session. A monitor can stop that session without a lease.
+  if (group == "robot" && action == "rci/start") {
+    StartRci(robot, req, res);
+    return;
+  }
+  if (group == "robot" && action == "rci/stop") {
+    const auto result = robot.StopRciControl();
+    ReplyRci(res, result, robot.GetRciStatus(), "RCI stop requested");
+    return;
+  }
   const int auth =
       context.lease.Authorize(req.get_header_value("X-Rocos-Control-Token"),
                               req.get_header_value("X-Rocos-Client-Id"));
   if (auth) {
     Reply(res, false, auth,
           "Invalid or missing control credentials for selected arm");
+    return;
+  }
+  if (group == "robot" && action == "rci/enable") {
+    const auto result = robot.EnableRci();
+    ReplyRci(res, result, robot.GetRciStatus(), "RCI enabled");
+    return;
+  }
+  if (group == "robot" && action == "rci/disable") {
+    const auto result = robot.DisableRci();
+    ReplyRci(res, result, robot.GetRciStatus(), "RCI disable requested");
     return;
   }
   if (group == "control") {
@@ -473,6 +539,10 @@ void DualArmHttpServer::Handle(const httplib::Request& req,
   const bool precise = action == "movej" || action == "movej_ik" ||
                        action == "movel" || action == "movel_fk";
   const bool stop = action == "stop" || action == "jog/stop";
+  if (!stop && (precise || action.rfind("jog/", 0) == 0) &&
+      robot.IsRciEnabled())
+    throw ApiError(static_cast<int>(Result::ConflictTaskRunning),
+                   "RCI owns the selected arm's motion interface");
   std::string command_id;
   if (stop) {
     if ((context.lease.CommandProtocol() == 1 ||

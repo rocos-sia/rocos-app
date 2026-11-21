@@ -13,6 +13,7 @@ Hardware 内部仍负责 CiA 402 上下使能；程序显式调用 `WaitForSigna
 | --- | --- |
 | [dynamics_id_main.cc](dynamics_id_main.cc) | CSP 激励执行，记录实测 `q/dq/tau` |
 | [excitation_trajectory.hpp](excitation_trajectory.hpp) | 读取并计算 Studio 的 Fourier 轨迹 |
+| [friction_sweep_trajectory.hpp](friction_sweep_trajectory.hpp) | 读取并计算 Studio 的单关节摩擦往返协议 |
 | [export_impedance_model.py](export_impedance_model.py) | 将 Studio 的 `Pβ` 导出为 C++ 可加载的 JSON |
 | [identified_joint_impedance.cpp](identified_joint_impedance.cpp) | 辨识刚体模型、摩擦补偿与 PD 阻抗计算 |
 | [joint_impedance_main.cc](joint_impedance_main.cc) | CSP 定姿启动、CST 模型验证与诊断记录 |
@@ -88,13 +89,14 @@ Hardware YAML 与模型 URDF 分离，不再读取 URDF 中旧版 `<hardware>` �
 稳定 → 激励和采集 → 结束保持 → 下使能 → 写盘。
 `SetPosition()` 不等待周期，所以等待由主循环显式完成。
 每次写入前（包括预置、过渡、激励和保持）都检查目标维度、有限值、硬件位置限位及
-`abs(q_target - q_last_sent) / dt` 指令速度。`dt` 使用 `Hardware::GetDt()` 的标称周期，
-速度上限取硬件与 Studio 轨迹配置的较小值；不使用调度延迟后的实际间隔放宽限制。
+`abs(q_target - q_last_sent) / dt` 指令速度。`dt` 取 `Hardware::GetDt()` 读到的主站周期，
+下发速度上限取硬件 YAML 的 `vel`，轨迹预检采用硬件与 Studio 轨迹速度上限的较小值。
 第一条指令以实测位置为基线，之后仅在成功调用 `SetPosition()` 后更新基线。
 过渡阶段允许从轨迹位置范围外、硬件限位内的姿态出发；激励阶段继续检查轨迹自身位置范围。
 超限目标整组拒绝下发，不裁剪、不补点；程序请求下使能后保存已有采样及失败原因，
 其中指令速度错误包含关节名、前后目标、周期、计算速度和上限。
-轨迹推进使用实际时间；`time_scale` 范围 `(0,1]`，参考导数按其相应幂次缩放。
+每次收到主站周期通知，过渡推进 `dt`，激励轨迹推进 `dt * time_scale`。`time_scale`
+范围 `(0,1]`，参考导数按其相应幂次缩放。
 CSV 中的时间与反馈始终是实际值，导入 Studio 时不要再次应用该缩放。
 
 主列：`time,loop,q_1,dq_1,tau_1,...`，顺序等于轨迹 `joint_names`。
@@ -108,6 +110,25 @@ CSV 中的时间与反馈始终是实际值，导入 Studio 时不要再次应�
 若主站完全停止交换 PDO，程序无法确认物理驱动器已下使能，会报告确认失败。
 `--check_only` 采用 1 ms 网格预检，连接后还会按实际总线周期复检，运行时也逐点检查目标。
 该网格检查不宣称是整个连续轨迹的数学极值证明。
+
+## 单关节摩擦采集
+
+在 Studio 生成单关节摩擦轨迹后，使用导出的 `friction_protocol.json`。在 Hardware 页选择「摩擦采集」，也可在远端终端直接运行以下命令。
+
+```bash
+./build/bin/dynamicsIdMain --check_only \
+  --hardware=/absolute/path/hardware.yaml \
+  --friction_protocol=/absolute/path/friction_protocol.json
+
+sudo -- ./build/bin/dynamicsIdMain --id=1 \
+  --hardware=/absolute/path/hardware.yaml \
+  --friction_protocol=/absolute/path/friction_protocol.json \
+  --output=/absolute/path/friction_measurements.csv
+```
+
+预检核对协议和硬件 YAML 中的关节映射、位置、速度、加速度及 jerk 限制，并打印起始姿态。采集前停止占用目标驱动器的控制程序，保留 EtherCAT 主站，确认各轴已下使能且静止，并确认当前姿态到起始姿态的关节空间直线路径可通行。程序在使能后用平滑梯形速度曲线同步移动各轴到协议的 `initial_pose`。每轴速度上限为 0.2 rad/s 和硬件限速的较小值，按硬件加速度和 jerk 限制规划，起点与终点的速度、加速度均为零。起始目标下发后保持 2 秒，七轴通过速度和到位检查后开始记录。采集阶段只有协议指定的轴往返，其余轴保持协议姿态。速度档和重复次数来自协议。
+
+命令每个主站周期更新。记录使用协议采样率，上限为主站频率。CSV 包含实际单调时间 `time`、所对应的轨迹时间 `reference_time`、`repeat/pair/sweep/phase/target_velocity` 和各轴实测 `q_i/dq_i/tau_i`。其中 `target_velocity` 用于区分速度档，辨识速度来自驱动器反馈 `dq_i`。驱动力矩 `tau_i` 使用硬件配置的 `torque_per_unit` 换算。旁路 `.meta.yaml` 保存实验轴、标称主站周期、换算参数和完成状态。
 
 ## Studio 与模型导出
 

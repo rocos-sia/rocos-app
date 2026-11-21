@@ -35,6 +35,10 @@ TEST_CASE("Excitation matches Studio analytic reference and endpoints") {
         }
     }
     CHECK_THROWS(trajectory.validate(0, .001));
+    trajectory.plannedVelocity[0] = .02;
+    JntArray target(trajectory.names.size());
+    CHECK_NOTHROW(trajectory.evaluate(1, 1, target));  // 真机求值使用硬件速度上限。
+    CHECK_THROWS(trajectory.validate(1, .001));         // 预检仍检查激励速度约束。
     trajectory.a[0][0] = 100;
     CHECK_THROWS(trajectory.validate(1, .001));
 }
@@ -47,26 +51,24 @@ TEST_CASE("Hardware bindings reject ambiguous names and unrelated drives") {
     CHECK_THROWS(orderedDrives(hardware, {"joint_1", "joint_2"}));
 }
 
-TEST_CASE("Acquisition checks position steps against hardware period and stricter velocity") {
+TEST_CASE("Acquisition checks position steps against the hardware period and velocity limit") {
     const auto hardware = Hardware::LoadConfigFromYAML(fixture("hardware.yaml"));
     ExcitationTrajectory trajectory(fixture("trajectory.json"), hardware);
     JntArray previous(2), target(2);
     previous.data.setZero();
     target.data.setZero();
     auto check = [&](double dt = .001) {
-        validatePositionCommand(target, previous, trajectory.drives, trajectory.velocity, dt);
+        validatePositionCommand(target, previous, trajectory.drives, dt);
     };
     CHECK_NOTHROW(check()); // 首次预置使用实测位置，无首帧豁免。
     for (double sign : {-1., 1.}) {
-        target(0) = sign * .002;
-        CHECK_NOTHROW(check()); // 恰好等于 Studio 的 2 rad/s 上限。
         target(0) = sign * .0021;
+        CHECK_NOTHROW(check()); // 超过规划的 2 rad/s，仍在硬件上限内。
+        target(0) = sign * .003;
+        CHECK_NOTHROW(check()); // 恰好等于硬件的 3 rad/s 上限。
+        target(0) = sign * .0031;
         CHECK_THROWS_AS(check(), std::runtime_error);
     }
-    // 即使外部速度上限更大，也不能越过硬件的 3 rad/s。
-    trajectory.velocity[0] = 10;
-    target(0) = .0031;
-    CHECK_THROWS_AS(check(), std::runtime_error);
     target.data.setZero();
     for (double dt : {0., -1., std::numeric_limits<double>::infinity(),
                       std::numeric_limits<double>::quiet_NaN()}) CHECK_THROWS(check(dt));

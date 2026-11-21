@@ -21,11 +21,17 @@ struct Arguments {
 };
 
 inline Arguments arguments(int argc, char** argv) {
+    Arguments result;
+    if (argc >= 3 && std::string(argv[argc - 2]) == "--arm") {
+        result.options.arm = argv[argc - 1];
+        if (result.options.arm != "left" && result.options.arm != "right")
+            throw std::invalid_argument("--arm must be left or right");
+        argc -= 2;
+    }
     if (argc > 7)
         throw std::invalid_argument(
             "Usage: example [host [http_port [udp_port [joint_index [amplitude_rad "
-            "[duration_s]]]]]]");
-    Arguments result;
+            "[duration_s]]]]]] [--arm left|right]");
     auto port = [](const char* value) {
         const auto number = std::stoul(value);
         if (!number || number > 65535) throw std::invalid_argument("Port outside 1..65535");

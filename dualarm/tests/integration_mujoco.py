@@ -4,6 +4,7 @@ import argparse
 from concurrent.futures import ThreadPoolExecutor
 import json
 import math
+import os
 from pathlib import Path
 import socket
 import struct
@@ -18,9 +19,9 @@ ROOT = Path(__file__).resolve().parents[2]
 OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
-def ipc():
+def ipc(master_ids):
     names = []
-    for i in (0, 1):
+    for i in master_ids:
         for pattern in (f'ecm_v2_{i}', f'pd_input_v2_{i}', f'pd_output_v2_{i}', f'sem.sync_v2_{i}_*'):
             names.extend(Path('/dev/shm').glob(pattern))
     return names
@@ -102,26 +103,75 @@ def wait_enabled_stable(arm):
     wait_for(stable, 5)
 
 
+def check_rci(left, right, client, report, output):
+    start = right.prefix + 'robot/rci/start'
+    enable = right.prefix + 'robot/rci/enable'
+    call(start, {}, expected=-1018)
+    call(enable, {}, expected=3006)
+    call(enable, {}, left.headers, expected=3007)
+    right.request('robot/rci/enable', {}, expected=-2212)
+    for arm in (left, right):
+        arm.request('robot/enable', {})
+        wait_enabled_stable(arm)
+
+    right.request('robot/rci/enable', {})
+    call(start, {'port': 0}, expected=1001)
+    call(start, {'mode': 'velocity'}, expected=1001)
+    for action in ('movej', 'movel', 'jog/joint'):
+        right.request(f'robot/{action}', {}, expected=-2215)
+    call(right.prefix + 'robot/rci/disable', {}, expected=3006)
+    right.request('robot/rci/disable', {})
+    for arm in (left, right):
+        arm.request('control/release', {})
+    report['checks'].append('per-arm RCI credentials, startup validation and motion exclusion')
+
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as left_port, \
+            socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as right_port:
+        left_port.bind(('127.0.0.1', 0))
+        right_port.bind(('127.0.0.1', 0))
+        ports = [left_port.getsockname()[1], right_port.getsockname()[1]]
+    sdk = subprocess.run([str(client), *map(str, ports)], text=True,
+                         capture_output=True, timeout=14, check=False)
+    (output / 'librocos.log').write_text(sdk.stdout + sdk.stderr)
+    assert sdk.returncode == 0, sdk.stderr
+    report['concurrent_udp'] = json.loads(sdk.stdout)
+    report['checks'] += [
+        'librocos right-arm UDP motion leaves the enabled left arm at its hold position',
+        'librocos sessions move both arms concurrently on separate UDP ports',
+        'right UDP loss faults its RCI session while the left session keeps applying commands',
+        'librocos stop returns to RCI and disable returns to STOPPED',
+    ]
+    right.acquire()
+    right.request('robot/reset', {})
+    right.request('control/release', {})
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--app', type=Path, default=ROOT / 'build/dualarm/bin/rocosDualArmMain')
     parser.add_argument('--sim', type=Path, default=ROOT.parent / 'rocos-mujoco/build/headless/bin/rocos_mujoco_sim')
-    parser.add_argument('--output', type=Path, default=ROOT / 'build/dualarm/integration')
+    parser.add_argument('--output', type=Path)
     parser.add_argument('--tool-packages', action='store_true',
                         help='Exercise configured package calibration with six valid simulated poses')
     parser.add_argument('--basic-motion', action='store_true',
                         help='Focus on independent MoveJ, control rights, calibration and logging; skip the extended IK/jog suite')
     parser.add_argument('--shoulder', action='store_true',
                         help='Use the opt-in shoulder-v1 bases, preserving seven axes')
+    parser.add_argument('--rci-only', action='store_true',
+                        help='Exercise concurrent independent UDP RCI sessions on isolated simulator masters')
     args = parser.parse_args()
+    if args.rci_only and (args.tool_packages or args.basic_motion):
+        parser.error('--rci-only cannot be combined with other motion suites')
     suffix = '_shoulder' if args.shoulder else ''
     urdf_name = f'dualarm{suffix}.urdf'
-    sim_duration = 120 if args.tool_packages else 65
+    sim_duration = 18 if args.rci_only else (120 if args.tool_packages else 65)
+    master_ids = (os.getpid() * 2, os.getpid() * 2 + 1) if args.rci_only else (0, 1)
     args.app = args.app.resolve()
     args.sim = args.sim.resolve()
-    args.output = args.output.resolve()
-    if ipc():
-        raise RuntimeError(f'Master 0/1 already exists: {ipc()}')
+    args.output = (args.output or ROOT / 'build/dualarm' /
+                   ('integration-rci' if args.rci_only else 'integration')).resolve()
+    if ipc(master_ids):
+        raise RuntimeError(f'Master IPC already exists: {ipc(master_ids)}')
     for port in (8080, 8082):
         with socket.socket() as sock:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -129,6 +179,9 @@ def main():
     args.output.mkdir(parents=True, exist_ok=True)
     logs, app, sim = [], None, None
     report = {'passed': False, 'checks': [], 'app_binary': str(args.app), 'motion_suite': 'basic' if args.basic_motion else 'extended', 'coordinate_profile': 'shoulder-v1' if args.shoulder else 'legacy'}
+    if args.rci_only:
+        report['motion_suite'] = 'rci'
+        report['master_ids'] = list(master_ids)
     arms = [Arm('left'), Arm('right')]
 
     def start(name, command):
@@ -143,10 +196,10 @@ def main():
         config = args.output / 'simulation.json'
         config.write_text(json.dumps({'model': str(model / f'mjcf/scene{suffix}.xml'), 'masters': [
             {'ecat_id': i, 'hardware_config': str(model / f'hardware_{side}.yaml')}
-            for i, side in enumerate(('left', 'right'))], 'cycle_time_us': 1000,
+            for i, side in zip(master_ids, ('left', 'right'))], 'cycle_time_us': 1000,
             'duration_sec': sim_duration, 'visualize': False}))
         # All persistence tests write to owned fixtures, never source device files.
-        for side in ('left', 'right'):
+        for master_id, side in zip(master_ids, ('left', 'right')):
             device_dir = args.output / side
             (device_dir / 'identification').mkdir(parents=True, exist_ok=True)
             for filename in ('frames.yaml', 'identification/payload.yaml'):
@@ -165,6 +218,11 @@ def main():
             child = {'schema_version': 1, 'robot_config': str(model / f'app/robot_{side}{suffix}.yaml'),
                      'device_config': str(device_dir / 'device.json'), 'tool_library': str(device_dir / 'tools'),
                      'scripts': str(ROOT / 'scripts'), 'web_root': str(ROOT / 'web')}
+            if args.rci_only:
+                override = device_dir / 'sim-master.json'
+                override.write_text(json.dumps({'robot': {
+                    'ecat_id': master_id, 'master': {'id': master_id}}}))
+                child['user_config'] = str(override)
             (args.output / f'{side}.json').write_text(json.dumps(child))
         app_config = args.output / 'app.json'
         app_config.write_text(json.dumps({'schema_version': 1,
@@ -175,7 +233,7 @@ def main():
         sim_deadline = time.monotonic() + sim_duration + 10
         def sim_ready():
             assert sim.poll() is None, 'Simulator exited during startup'
-            return all(Path(f'/dev/shm/ecm_v2_{i}').exists() for i in (0, 1))
+            return all(Path(f'/dev/shm/ecm_v2_{i}').exists() for i in master_ids)
         wait_for(sim_ready)
         time.sleep(0.1)
         app = start('app', [args.app, '--config', app_config])
@@ -186,7 +244,7 @@ def main():
             except urllib.error.URLError:
                 return False
         listing = wait_for(ready, 15)
-        assert [a['ecat_id'] for a in listing['arms']] == [0, 1]
+        assert [a['ecat_id'] for a in listing['arms']] == list(master_ids)
         assert [a['joint_count'] for a in listing['arms']] == [7, 7]
         assert [a['base_link'] for a in listing['arms']] == (['left_base', 'right_base'] if args.shoulder else ['base_link', 'base_link'])
         report['pids'] = {'app': app.pid, 'simulator': sim.pid}
@@ -197,6 +255,13 @@ def main():
             assert not arm.request('robot/move_status')['is_running']
             arm.acquire()
         left, right = arms
+        if args.rci_only:
+            assert listing['capabilities']['rci'] and not listing['capabilities']['synchronized_motion']
+            check_rci(left, right, args.app.with_name('dualarm_rci_client'), report, args.output)
+            app.terminate()
+            assert app.wait(timeout=12) == 0, 'Orderly shutdown failed'
+            report['passed'] = True
+            return
         check_models(call, OPENER, model, report, urdf_name)
         check_frames(arms, call, OPENER, report)
         assert left.headers['X-Rocos-Control-Token'] != right.headers['X-Rocos-Control-Token']
@@ -358,14 +423,15 @@ def main():
                 cleanup.append(f'Simulator exit={sim.returncode}')
         for log in logs:
             log.close()
-        if ipc():
-            cleanup.append(f'Remaining IPC: {ipc()}')
+        if ipc(master_ids):
+            cleanup.append(f'Remaining IPC: {ipc(master_ids)}')
         report['cleanup_errors'] = cleanup
         report['passed'] = report['passed'] and not cleanup
         (args.output / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
         if cleanup:
             raise RuntimeError('; '.join(cleanup))
-    print(json.dumps(report, indent=2))
+        if report['passed']:
+            print(json.dumps(report, indent=2))
 
 
 if __name__ == '__main__':

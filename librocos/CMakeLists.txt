@@ -25,7 +25,7 @@ option(LIBROCOS_BUILD_TESTS "Build librocos offline protocol tests" ON)
 if(LIBROCOS_BUILD_EXAMPLES)
     foreach(example echo_robot_state generate_joint_position_motion
                     joint_point_to_point_motion generate_consecutive_motions communication_test
-                    joint_6_7_sine)
+                    joint_5_7_sine joint_6_7_sine)
         add_executable(librocos_${example} examples/${example}.cpp)
         target_link_libraries(librocos_${example} PRIVATE librocos)
     endforeach()

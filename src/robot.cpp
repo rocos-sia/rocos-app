@@ -479,14 +479,16 @@ namespace rocos {
 
     void Robot::on_fsm_stopped() {
       servo_watchdog_armed_.store(false);
+      const bool was_rci_enabled = rci_enabled_.load();
       FinishRciControl();
       if (!impl_->is(sml::state<class RCI>))
           emitLogEvent(LogEventType::EnteredStopped, LogModule::Robot, 0, -1, 0, 0, 0, LogLevel::Info);
 
       {
         std::lock_guard<std::mutex> lock(mtx_);
-        // CSP 已使能时保持 Target Position；下使能或力矩模式使用反馈位置。
-        const bool hold_command = IsEnabled() && hardware->GetOutputSnapshot().mode == 8;
+        // RCI 停止或退出时沿用最后下发的 CSP 目标，即使此刻使能反馈已掉落。
+        const bool hold_command =
+            (was_rci_enabled || IsEnabled()) && hardware->GetOutputSnapshot().mode == 8;
         auto hold = hold_command ? hardware->GetCmdPosition() : hardware->GetPosition();
         if (hold.rows() != static_cast<unsigned int>(model->GetJointNum()) ||
             !hold.data.allFinite()) {
