@@ -15,6 +15,7 @@
 
 namespace {
 struct OfflineMaster {
+    static constexpr double simulatedCstSpeed = 0.1;
     static int nextId() {
         static int id = 600000 + getpid() * 10;
         return id++;
@@ -25,6 +26,9 @@ struct OfflineMaster {
         std::filesystem::temp_directory_path() / ("rocos-identification-" + std::to_string(id));
     bool enabled = false, positionMoved = false, torqueWritten = false;
     std::vector<int32_t> targetsBeforeGap;
+    bool cspEnabled = false, disabledBeforeCst = false, cstRequested = false;
+    double secondsBeforeCst = 0;
+    int16_t torqueBeforeCst = 0, firstCstTorque = 0;
 
     OfflineMaster() {
         REQUIRE(std::filesystem::create_directory(directory));
@@ -37,11 +41,13 @@ struct OfflineMaster {
         for (int i = 0; i < 2; ++i) {
             auto& slave = bus.slaves[i];
             slave.id = i;
-            slave.input_var_num = slave.output_var_num = 4;
+            slave.input_var_num = 5;
+            slave.output_var_num = 4;
             descriptor(slave.input_vars[0], "status", i * 16, 2);
             descriptor(slave.input_vars[1], "position", i * 16 + 2, 4);
             descriptor(slave.input_vars[2], "velocity", i * 16 + 6, 4);
             descriptor(slave.input_vars[3], "torque", i * 16 + 10, 2);
+            descriptor(slave.input_vars[4], "Mode of operation display", i * 16 + 12, 1);
             descriptor(slave.output_vars[0], "control", i * 16, 2);
             descriptor(slave.output_vars[1], "mode", i * 16 + 2, 1);
             descriptor(slave.output_vars[2], "target", i * 16 + 3, 4);
@@ -59,7 +65,8 @@ struct OfflineMaster {
         v.offset = offset;
         v.size = size;
     }
-    int run(bool impedance, bool loseCycles = false, bool delayPositionCycle = false) {
+    int run(bool impedance, bool loseCycles = false, bool delayPositionCycle = false,
+            bool rejectCst = false) {
         const std::string output = (directory / "measurements.csv").string();
         std::vector<std::string> args;
         if (impedance) {
@@ -85,6 +92,7 @@ struct OfflineMaster {
             _exit(127);
         }
         const auto start = std::chrono::steady_clock::now();
+        auto enabledAt = start;
         int status = 0, activeCycles = 0;
         pid_t finished = 0;
         while ((finished = waitpid(child, &status, WNOHANG)) == 0) {
@@ -94,17 +102,40 @@ struct OfflineMaster {
                 if ((control & 0x8f) == 0x06) driveStatus = 0x21;
                 if ((control & 0x8f) == 0x07) driveStatus = 0x23;
                 if ((control & 0x8f) == 0x0f) driveStatus = 0x27;
-                master.setSlaveInputVarValue<uint16_t>(i, 0, driveStatus);
+                const auto requestedMode = master.getSlaveOutputVarValue<int8_t>(i, 1);
+                const auto mode = rejectCst && requestedMode == 10 ? int8_t{8} : requestedMode;
+                master.setSlaveInputVarValue<int8_t>(i, 4, mode);
+                const auto torque = master.getSlaveOutputVarValue<int16_t>(i, 3);
+                if (impedance && i == 0 && !cstRequested) {
+                    if (driveStatus == 0x27 && requestedMode == 8) {
+                        cspEnabled = true;
+                        torqueBeforeCst = torque;
+                    }
+                    if (cspEnabled && driveStatus != 0x27) disabledBeforeCst = true;
+                    if (driveStatus == 0x27 && requestedMode == 10) {
+                        cstRequested = true;
+                        secondsBeforeCst = std::chrono::duration<double>(
+                            std::chrono::steady_clock::now() - enabledAt).count();
+                        firstCstTorque = torque;
+                    }
+                }
+                const bool followsTorque = driveStatus == 0x27 && mode == 10;
+                master.setSlaveInputVarValue<uint16_t>(i, 0,
+                                                        driveStatus | (followsTorque ? 0x1000 : 0));
+                if (impedance && i == 1) {
+                    // joint_2 has 50000 counts/rad after the hardware ratio.
+                    master.setSlaveInputVarValue<int32_t>(i, 2,
+                        followsTorque ? static_cast<int32_t>(simulatedCstSpeed * 50000) : 0);
+                }
                 if (driveStatus == 0x27) {
+                    if (!enabled) enabledAt = std::chrono::steady_clock::now();
                     enabled = true;
-                    const auto mode = master.getSlaveOutputVarValue<int8_t>(i, 1);
                     if (mode == 8) {
                         const auto target = master.getSlaveOutputVarValue<int32_t>(i, 2);
                         positionMoved |= target != (i ? -500 : 1000);
                         master.setSlaveInputVarValue<int32_t>(i, 1, target);
                     }
-                    if (mode == 10)
-                        torqueWritten |= master.getSlaveOutputVarValue<int16_t>(i, 3) != 0;
+                    if (mode == 10) torqueWritten |= torque != 0;
                 }
             }
             if (enabled) ++activeCycles;
@@ -114,7 +145,12 @@ struct OfflineMaster {
                 for (int i = 0; i < 2; ++i)
                     targetsBeforeGap.push_back(master.getSlaveOutputVarValue<int32_t>(i, 2));
             }
-            if (!loseCycles || activeCycles < 10) REQUIRE(master.notifyClients());
+            if (!loseCycles || activeCycles < 10) {
+                rocos::atomicStore(master.ecatBus->timestamp, static_cast<long>(
+                    std::chrono::duration_cast<std::chrono::microseconds>(
+                        std::chrono::system_clock::now().time_since_epoch()).count()));
+                REQUIRE(master.notifyClients());
+            }
             if (std::chrono::steady_clock::now() - start > std::chrono::seconds(12)) {
                 kill(child, SIGKILL);
                 waitpid(child, &status, 0);
@@ -159,28 +195,57 @@ TEST_CASE_FIXTURE(OfflineMaster, "Hardware-only acquisition writes measured Nm i
     }
 }
 
-TEST_CASE_FIXTURE(OfflineMaster, "Hardware-only impedance preloads and writes CST torque") {
+TEST_CASE_FIXTURE(OfflineMaster, "Impedance preloads gravity in CSP and applies configured friction in CST") {
     REQUIRE(run(true) == 0);
     CHECK(enabled);
+    CHECK(cspEnabled);
+    CHECK(cstRequested);
+    CHECK_FALSE(disabledBeforeCst);
+    CHECK(secondsBeforeCst >= 5.0);
+    CHECK(torqueBeforeCst == firstCstTorque);
+    CHECK(firstCstTorque != 50);  // CSP feedback is recorded, not copied to the CST target.
     CHECK(torqueWritten);
     std::ifstream csv(directory / "measurements.csv");
     std::string line;
     std::getline(csv, line);
-    bool checked = false;
+    CHECK(line.find("csp_hold_tau_1,csp_hold_tau_2") != std::string::npos);
+    bool checked = false, checkedFriction = false;
     while (std::getline(csv, line)) {
         std::replace(line.begin(), line.end(), ',', ' ');
         std::istringstream input(line);
         std::vector<double> row;
         double value;
         while (input >> value) row.push_back(value);
-        REQUIRE(row.size() == 20);
+        REQUIRE(row.size() == 22);
+        CHECK(row[20] == doctest::Approx(5.0));
+        CHECK(row[21] == doctest::Approx(-5.0));
         if (row[3] == 1) {
+            CHECK(row[9] == 0);
+            CHECK(firstCstTorque == static_cast<int16_t>(row[8] * 10));
             CHECK(master.getSlaveOutputVarValue<int16_t>(0, 3) ==
                   static_cast<int16_t>(row[11] * 10));
+            if (row[13] == doctest::Approx(simulatedCstSpeed)) {
+                const double v = row[13];
+                const double expected = 0.7 * ((0.2 + 0.03 * std::abs(row[16]) +
+                    0.1 * std::exp(-std::pow(v / 0.15, 2))) * std::tanh(v / 0.05) + 0.08 * v);
+                CHECK(row[17] == doctest::Approx(expected));
+                checkedFriction = true;
+            }
             checked = true;
         }
     }
     CHECK(checked);
+    CHECK(checkedFriction);
+}
+
+TEST_CASE_FIXTURE(OfflineMaster, "Impedance aborts if CST mode feedback never acknowledges") {
+    CHECK(run(true, false, false, true) == 1);
+    CHECK(cspEnabled);
+    CHECK(cstRequested);
+    CHECK_FALSE(torqueWritten);
+    std::ifstream log(directory / "process.log");
+    const std::string message{std::istreambuf_iterator<char>(log), {}};
+    CHECK(message.find("CST mode or target torque following was not confirmed") != std::string::npos);
 }
 
 TEST_CASE_FIXTURE(OfflineMaster,
