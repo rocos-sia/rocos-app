@@ -15,7 +15,7 @@ Hardware 内部仍负责 CiA 402 上下使能；程序显式调用 `WaitForSigna
 | [excitation_trajectory.hpp](excitation_trajectory.hpp) | 读取并计算 Studio 的 Fourier 轨迹 |
 | [export_impedance_model.py](export_impedance_model.py) | 将 Studio 的 `Pβ` 导出为 C++ 可加载的 JSON |
 | [identified_joint_impedance.cpp](identified_joint_impedance.cpp) | 辨识刚体模型、摩擦补偿与 PD 阻抗计算 |
-| [joint_impedance_main.cc](joint_impedance_main.cc) | CST 启动、周期力矩下发与诊断记录 |
+| [joint_impedance_main.cc](joint_impedance_main.cc) | CSP 定姿启动、CST 模型验证与诊断记录 |
 | [experiment_common.hpp](experiment_common.hpp) | 关节绑定、反馈检查、周期同步和退出处理 |
 
 ```text
@@ -184,22 +184,23 @@ hardware: /absolute/path/hardware.yaml
 ./build/bin/jointImpedanceVelocityMain \
   --config=/absolute/path/identified_impedance.yaml --check_only
 
-# 会切换 CST、预置补偿力矩并使能，保持启动姿态 5 秒。
+# 先使能并用 CSP 保持 5 秒，再保持使能切到 CST 验证 5 秒。
 ./build/bin/jointImpedanceVelocityMain --id=0 \
   --config=/absolute/path/identified_impedance.yaml \
   --duration=5 --output=/absolute/path/impedance.csv
 ```
 
-控制公式：`Y(q,dq,0) Pβ + friction_scale * friction + Kp(qDesired-q) - Kd*dq`。
-初始目标为当前位置；先计算并检查初始补偿力矩，在下使能时切换 CST、写入初值，再上使能。
-每周期使用同一驱动速度反馈计算刚体、摩擦、阻尼以及速度保护。
-幅值限制为 Nm，变化率限制为 Nm/s，变化率使用实际周期秒数。
+用 CSP 使能并保持启动姿态 5 秒。最后 0.5 秒的各轴速度及位置误差须分别在 0.02 rad/s 和 0.02 rad 内。
+停稳后锁存当前位置作为 CST 目标，仅用该姿态的模型重力力矩预置，再保持使能切换模式。
+通过 `0x6061` 和 `0x6041` 的力矩目标跟随位确认 CST 生效，随后按 `Y(q,dq,0) Pβ + friction_scale * friction + Kp(qDesired-q) - Kd*dq` 接管阻抗控制。
+YAML 的 `friction_scale` 仅在 CST 接管后生效，设为 `0` 可进行关闭摩擦补偿的基线验证。
+CSP 的实测保持力矩仅用于诊断。力矩幅值限制为 Nm，CST 周期力矩变化率限制为 Nm/s。
 
-`--duration=0` 持续到信号退出；`--max_cycle_gap` 默认 0.020 s。
+`--duration` 从 CST 接管后开始计时，`0` 持续到信号退出。`--max_cycle_gap` 默认 0.020 s。
 固定容量诊断缓存保留最后 512 个周期，停机后写盘，包含实测 q/dq/tau、目标、
 刚体与摩擦分量、请求和下发力矩。`computed/written` 标记本周期是否完成计算/写 PDO，
 `written` 不代表驱动器已执行命令；未完成计算时分量列不应解释为有效模型结果。
-记录中断期间，`sent` 保留上一成功写入的命令。
+记录中断期间，`sent` 保留上一成功写入的命令。`csp_hold_tau_i` 是切换前停稳窗口中的实测力矩均值。
 
 控制器接口支持实测温度，但此保持程序尚无温度反馈接线。
 带非零温度斜率的模型可以离线检查，在线执行会在连接前拒绝，不能用常温冒充实测温度。

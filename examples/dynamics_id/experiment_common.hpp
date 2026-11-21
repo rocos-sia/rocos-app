@@ -110,6 +110,8 @@ inline void bindAndValidate(Hardware& hardware, const std::vector<Drive>& drives
 class DisableGuard {
    public:
     explicit DisableGuard(Hardware& hardware) : hardware_(hardware) {}
+    DisableGuard(Hardware& hardware, const std::vector<Drive>& drives)
+        : hardware_(hardware), drives_(&drives) {}
     ~DisableGuard() {
         if (!finished_) {
             try {
@@ -121,7 +123,13 @@ class DisableGuard {
     }
     void stop() {
         hardware_.SetDisabled();
-        require(hardware_.GetState() == JntState::DISABLED, "Drive disable was not confirmed");
+        if (drives_) {
+            for (const auto& drive : *drives_)
+                require(hardware_.GetJointState(drive.id) == JntState::DISABLED,
+                        "Drive disable was not confirmed: " + drive.joint_name);
+        } else {
+            require(hardware_.GetState() == JntState::DISABLED, "Drive disable was not confirmed");
+        }
         finished_ = true;
     }
     // 启动阶段下使能后，仍需在后续退出时再次执行下使能。
@@ -132,6 +140,7 @@ class DisableGuard {
 
    private:
     Hardware& hardware_;
+    const std::vector<Drive>* drives_ = nullptr;
     bool finished_ = false;
 };
 
